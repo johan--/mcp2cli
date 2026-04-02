@@ -1,15 +1,18 @@
 # mcp2cli install 设计文档
 
-本文档是 [0-design-overview.md](0-design-overview.md) 第十一章 `mcp2cli install` 的展开设计。
+本文档是 [0.0-design-overview.md](0.0-design-overview.md) 第十一章 `mcp2cli install` 的展开设计。
 
 ## 一、功能概述
 
-`mcp2cli install` 是一个一键式安装命令，将 MCP server 的安装、配置和 CLI 生成合并为一步操作。
+本章涉及两个命令：
 
-**核心流程：**
+- **`mcp2cli add`**：安装 MCP server 到物理机上
+- **`mcp2cli install`**：一键全流程，内部调用 `add`，再通过 Step Pipeline 依次执行 scan → generate cli → generate skill
+
+### mcp2cli add 流程
 
 ```
-mcp2cli install mcp-atlassian
+mcp2cli add mcp-atlassian
         │
         ▼
 ┌─ 1. AI 搜索安装信息 ────────────────────┐
@@ -28,31 +31,61 @@ mcp2cli install mcp-atlassian
 └───────────────────┬─────────────────────┘
                     │
                     ▼
-┌─ 3. 写入三个配置文件 ──────────────────┐
-│  ~/.claude.json         ✓ 写入         │
-│  ~/.cursor/mcp.json     ✓ 写入         │
-│  ~/.codex/config.toml   ⊘ 已存在,跳过   │
+┌─ 3. 安装 MCP server package ──────────┐
+│  根据 command 类型执行预安装：           │
+│  uvx  → uvx install mcp-atlassian      │
+│  npx  → npm install -g <package>       │
+│  node → 检查路径/提示用户手动安装        │
+│                                        │
+│  失败处理：打印警告，继续写入配置         │
+│  （AI 客户端首次启动时会自动安装）        │
 └───────────────────┬─────────────────────┘
                     │
                     ▼
-┌─ 4. 自动 scan + generate ─────────────┐
-│  mcp2cli scan mcp-atlassian            │
-│  mcp2cli generate cli mcp-atlassian    │
+┌─ 4. 写入三个配置文件 ──────────────────┐
+│  ~/.claude.json         ✓ 写入         │
+│  ~/.cursor/mcp.json     ✓ 写入         │
+│  ~/.codex/config.toml   ⊘ 已存在,跳过   │
+└────────────────────────────────────────┘
+```
+
+### mcp2cli install 流程
+
+```
+mcp2cli install mcp-atlassian
+        │
+        ▼
+┌─ 阶段 A: add ───────────────────────────┐
+│  mcp2cli add mcp-atlassian              │
+│  (AI 搜索 + 交互补全 + 安装 + 写配置)    │
+└───────────────────┬─────────────────────┘
+                    │ 成功
+                    ▼
+┌─ 阶段 B: Step Pipeline ────────────────┐
+│                                        │
+│  Step 1: scan                          │
+│    mcp2cli scan mcp-atlassian          │
+│    失败 → 警告 + 跳过后续步骤           │
+│         │ 成功                          │
+│         ▼                              │
+│  Step 2: generate cli                  │
+│    mcp2cli generate cli mcp-atlassian  │
+│    失败 → 警告 + 跳过后续步骤           │
+│         │ 成功                          │
+│         ▼                              │
+│  Step 3: generate skill                │
+│    mcp2cli generate skill mcp-atlassian│
+│    失败 → 警告                          │
+│                                        │
 └────────────────────────────────────────┘
 ```
 
 ## 二、命令接口
 
-### 2.1 基本用法
+### 2.1 mcp2cli add（安装并注册 MCP server）
 
 ```bash
-mcp2cli install <server-name>
-```
-
-### 2.2 完整参数
-
-```bash
-mcp2cli install <server-name> [OPTIONS]
+mcp2cli add <server-name> [OPTIONS]
 
 Arguments:
   server-name          MCP server 名称（如 mcp-atlassian, playwright）
@@ -61,11 +94,27 @@ Options:
   --targets            写入哪些配置文件 (默认: claude,cursor,codex)
                        可选值: claude, cursor, codex, all
                        示例: --targets claude,cursor
-  --skip-generate      跳过自动 scan + generate 步骤
   --env KEY=VALUE      预设 env 值，跳过交互式询问（可多次使用）
                        示例: --env JIRA_URL=https://xxx.atlassian.net
-  --dry-run            只展示将要写入的内容，不实际修改文件
+  --skip-install       跳过 package 安装步骤，只写配置文件
+  --dry-run            只展示将要执行的操作，不实际修改文件
   --yes                跳过确认提示，直接执行
+```
+
+### 2.2 mcp2cli install（一键全流程）
+
+```bash
+mcp2cli install <server-name> [OPTIONS]
+
+Arguments:
+  server-name          MCP server 名称（如 mcp-atlassian, playwright）
+
+Options:
+  --targets            同 add，透传给 add 阶段
+  --env KEY=VALUE      同 add，透传给 add 阶段
+  --dry-run            只展示将要写入的内容，不实际修改文件（不执行 pipeline）
+  --yes                跳过确认提示，直接执行
+  --skip-generate      跳过 pipeline（等价于直接使用 mcp2cli add）
 ```
 
 ### 2.3 配置文件路径
@@ -83,16 +132,11 @@ Options:
 使用 `claude -p` 搜索互联网，获取 MCP server 的安装配置信息：
 
 ```bash
-claude -p "<install_prompt>" \
-  --output-format json \
-  --model sonnet \
-  --max-turns 5 \
-  --allowedTools "WebSearch,WebFetch"
+claude -p "<install_prompt>" --output-format json
 ```
 
 **关键设计：**
 
-- 使用 `--allowedTools "WebSearch,WebFetch"` 限制 AI 只能搜索和读取网页，不可执行任何写操作
 - AI 通过搜索 GitHub README、npm/PyPI 页面、官方文档等获取安装信息
 - 输出结构化 JSON，由程序侧解析和处理
 
@@ -328,43 +372,71 @@ Proceed? [Y/n]
 
 使用 `--yes` 跳过此确认。使用 `--dry-run` 则只显示预览不执行。
 
-## 五、自动 scan + generate
+## 五、Step Pipeline（install 专属）
 
-### 5.1 流程
+`mcp2cli install` 在 `add` 完成后，通过 Step Pipeline 依次执行 scan → generate cli → generate skill。
 
-写入配置文件后，自动执行：
+### 5.1 Step 数据结构
 
-```
-┌─ scan ──────────────────────────────────┐
-│  mcp2cli scan mcp-atlassian             │
-│  → 启动 MCP server 子进程               │
-│  → 获取 tool 列表                       │
-│  → 写入 ~/.agents/mcp2cli/tools/        │
-│                                         │
-│  失败处理：                              │
-│  → 打印警告，不阻断后续步骤              │
-│  → 提示: "Scan failed. You can retry    │
-│     later with: mcp2cli scan ..."       │
-└───────────────────┬─────────────────────┘
-                    │ 成功
-                    ▼
-┌─ generate cli ──────────────────────────┐
-│  mcp2cli generate cli mcp-atlassian     │
-│  → AI 分析 tool 列表                    │
-│  → 生成层级命令树 YAML                   │
-│                                         │
-│  失败处理：同上                           │
-└─────────────────────────────────────────┘
+```python
+@dataclass
+class Step:
+    name: str           # 步骤名，用于日志和错误信息
+    run: Callable       # 执行函数，返回 bool（是否成功）
+    retry_cmd: str      # 失败时提示用户的手动重试命令
+    depends_on: list[str] = field(default_factory=list)
+    # depends_on 列表中任意一步失败，本步自动跳过
 ```
 
-### 5.2 跳过选项
+### 5.2 Pipeline 定义与 Runner
+
+```python
+pipeline: list[Step] = [
+    Step(
+        name="scan",
+        run=lambda: run_scan(server_name),
+        retry_cmd=f"mcp2cli scan {server_name}",
+    ),
+    Step(
+        name="generate-cli",
+        run=lambda: run_generate_cli(server_name),
+        retry_cmd=f"mcp2cli generate cli {server_name}",
+        depends_on=["scan"],        # scan 失败则跳过
+    ),
+    Step(
+        name="generate-skill",
+        run=lambda: run_generate_skill(server_name),
+        retry_cmd=f"mcp2cli generate skill {server_name}",
+        depends_on=["generate-cli"],
+    ),
+]
+
+# Runner（无需 reduce/chain，for 循环 + 结构化 Step 即是最优平衡）
+results: dict[str, bool] = {}
+for step in pipeline:
+    if any(not results.get(dep) for dep in step.depends_on):
+        warn(f"Skipping {step.name}: dependency failed")
+        results[step.name] = False
+        continue
+
+    ok = step.run()
+    results[step.name] = ok
+    if not ok:
+        warn(f"{step.name} failed. Retry later: {step.retry_cmd}")
+        # 不 break，让后续无依赖的步骤继续执行
+```
+
+**设计说明**：
+- `depends_on` 让依赖关系声明在数据里而非散落在 if-else 中
+- 每步失败只打警告，不中止 pipeline（除非后续步骤有依赖）
+- Runner 不感知具体步骤内容，仅负责调度和错误收集
+
+### 5.3 跳过 Pipeline
 
 ```bash
-# 只写配置文件，不自动 scan/generate
+# 只写配置文件，等价于直接用 mcp2cli add
 mcp2cli install mcp-atlassian --skip-generate
 ```
-
-适用场景：用户只想注册 server 到配置中，后续手动控制 scan/generate 时机。
 
 ## 六、端到端示例
 
@@ -421,10 +493,14 @@ $ mcp2cli install mcp-atlassian
    Coverage: 65/65 tools ✓
    Written to ~/.agents/mcp2cli/cli/mcp-atlassian.yaml
 
+🧩 Generating skill definitions...
+   Generated 12 skills for mcp-atlassian
+   Written to ~/.agents/mcp2cli/skills/mcp-atlassian/
+
 ✅ Installation complete!
    Next steps:
-   - Use: mcp2cli mcp-atlassian jira issue create --help
-   - Generate skill: mcp2cli generate skill mcp-atlassian
+   - Use CLI: mcp2cli mcp-atlassian jira issue create --help
+   - Use skill: mcp2cli mcp-atlassian jira (in Claude Code)
 ```
 
 ### 6.2 已存在时跳过
@@ -483,6 +559,7 @@ $ mcp2cli install mcp-atlassian \
 
 🔧 Scanning mcp-atlassian... 65 tools found.
 🤖 Generating CLI command tree... 65/65 tools ✓
+🧩 Generating skill definitions... 12 skills ✓
 
 ✅ Installation complete!
 ```
@@ -540,31 +617,33 @@ $ mcp2cli install mcp-atlassian --dry-run
 
 ```
 mcp2cli/
-├── main.py                    # 新增 install 子命令
+├── main.py                    # 新增 add / install 子命令
 ├── installer/
 │   ├── __init__.py
 │   ├── ai_search.py           # AI 搜索安装信息（claude -p 调用、prompt 构造、JSON 解析）
 │   ├── config_writer.py       # 三配置文件写入（Claude/Cursor/Codex 各一个写入函数）
-│   └── interactive.py         # 交互式 env 输入（密码模式、可选跳过）
+│   ├── interactive.py         # 交互式 env 输入（密码模式、可选跳过）
+│   └── pipeline.py            # Step dataclass + pipeline runner
 ```
 
 ## 九、与现有模块的关系
 
 ```
-mcp2cli install <server>
+mcp2cli add <server>           mcp2cli install <server>
+    │                               │
+    │                               ├─ 调用 add（复用上述所有模块）
+    │                               │
+    ├── installer/ai_search.py      └─ installer/pipeline.py  ← 新增
+    │     调用 claude -p                  Step pipeline runner
     │
-    ├── installer/ai_search.py     ← 新模块：AI 搜索
-    │     调用 claude -p
-    │
-    ├── installer/config_writer.py ← 新模块：配置写入
+    ├── installer/config_writer.py
     │     读写 ~/.claude.json 等
     │
-    ├── installer/interactive.py   ← 新模块：交互输入
-    │     getpass / input
-    │
-    ├── scanner.py                 ← 已有：scan 复用
-    │     连接 MCP server → list_tools
-    │
-    └── generator/cli_gen.py       ← 已有：generate cli 复用
-          AI 生成命令映射
+    └── installer/interactive.py
+          getpass / input
+
+pipeline 内部调用（已有模块）：
+    scan        → scanner.py
+    generate cli  → generator/cli_gen.py
+    generate skill → generator/skill_gen.py
 ```
