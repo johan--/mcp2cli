@@ -6,22 +6,22 @@
 
 本章涉及三个命令：
 
-- **`mcp2cli mcp install`**：安装 MCP server（AI 搜索配置 → 交互补全 → 写入 `~/.agents/mcp2cli/servers.yaml`）
-- **`mcp2cli skill sync`**：将已生成的 skill 文件软链接到 Claude、Cursor、Codex 的 skill 目录，使 agent 能够发现并加载它
-- **`mcp2cli install`**：一键全流程，内部依次执行 `mcp install` → scan → generate cli → generate skill → `skill sync`
+- **`mcp2cli mcp add`**：注册 MCP server（AI 搜索配置 → 交互补全 → 写入 `~/.agents/mcp2cli/servers.yaml`）
+- **`mcp2cli skill sync`**：将已生成的 skill 文件复制到 Claude、Cursor、Codex 的 skill 目录，并关闭对应客户端的 MCP 配置，使 agent 通过 skill 而非 MCP 协议使用 server
+- **`mcp2cli install`**：一键全流程，内部依次执行 `mcp add` → scan → generate cli → generate skill → `skill sync`
 
 **命令职责分工：**
 
 | 命令 | 职责 |
 |------|------|
-| `mcp2cli mcp install` | 安装 MCP server package，写入 `~/.agents/mcp2cli/servers.yaml` |
-| `mcp2cli skill sync` | 将 skill 软链接到各 AI 客户端目录，agent 就能用 |
-| `mcp2cli install` | 完整流程：mcp install → scan → generate cli → generate skill → skill sync |
+| `mcp2cli mcp add` | 注册 MCP server，写入 `~/.agents/mcp2cli/servers.yaml` |
+| `mcp2cli skill sync` | 将 skill 复制到各 AI 客户端目录 + 关闭对应 MCP 配置 |
+| `mcp2cli install` | 完整流程：mcp add → scan → generate cli → generate skill → skill sync |
 
-### mcp2cli mcp install 流程
+### mcp2cli mcp add 流程
 
 ```
-mcp2cli mcp install mcp-atlassian
+mcp2cli mcp add mcp-atlassian
         │
         ▼
 ┌─ 1. AI 搜索安装信息 ────────────────────┐
@@ -67,7 +67,7 @@ mcp2cli mcp install mcp-atlassian
 ### mcp2cli skill sync 流程
 
 ```
-mcp2cli skill sync mcp-atlassian
+mcp2cli skill sync mcp-atlassian [--skip-disable] [--targets claude,cursor,codex]
         │
         ▼
 ┌─ 1. 检查 skill 文件是否已生成 ──────────┐
@@ -75,26 +75,50 @@ mcp2cli skill sync mcp-atlassian
 │  ├── SKILL.md   ✓ 存在                 │
 │  ├── reference/ ✓ 存在                 │
 │  └── examples/  ✓ 存在                 │
+│  不存在 → 报错，提示先执行 generate skill│
 └───────────────────┬─────────────────────┘
                     │
                     ▼
-┌─ 2. 创建/更新软链接 ────────────────────┐
-│  Claude Code:                          │
-│    ~/.claude/skills/mcp-atlassian      │
-│      → ~/.agents/mcp2cli/skills/       │
-│         mcp-atlassian/                 │
-│                                        │
-│  Cursor:                               │
-│    ~/.cursor/skills/mcp-atlassian      │
-│      → ~/.agents/mcp2cli/skills/       │
-│         mcp-atlassian/                 │
-│                                        │
-│  Codex:                                │
-│    ~/.codex/skills/mcp-atlassian       │
-│      → ~/.agents/mcp2cli/skills/       │
-│         mcp-atlassian/                 │
-└────────────────────────────────────────┘
+┌─ 2. 复制到 ~/.agents/skills/<server>/ ──┐
+│  复制整个 skill 目录（跳过 users/）      │
+│  保留目标已有的 users/ 不覆盖            │
+└───────────────────┬─────────────────────┘
+                    │
+                    ▼
+┌─ 3. 对每个 target 客户端执行 ────────────┐
+│                                          │
+│  3a. 复制 skill 文件                      │
+│    复制 → ~/.claude/skills/<server>/      │
+│    ⚠ 跳过源目录中的 users/               │
+│    ⚠ 保留目标已有的 users/（不覆盖）      │
+│                                          │
+│  3b. 关闭该客户端的 MCP 配置（默认执行）   │
+│    检查客户端 MCP 配置文件                 │
+│    → 若有该 server 且未 disabled          │
+│      → 设置 disabled: true               │
+│    → 若已 disabled 或不存在 → 跳过        │
+│    （--skip-disable 时跳过此步）          │
+│                                          │
+│  对 claude / cursor / codex 重复上述步骤   │
+└──────────────────────────────────────────┘
 ```
+
+**复制规则**：
+- 复制整个 skill 目录到目标路径
+- **忽略源 `users/` 目录**：复制时跳过源中的 `users/`，不将其复制到目标
+- **保留目标 `users/` 目录**：若目标已有 `users/`，保留不动，不删除不覆盖
+- 非 `users/` 的已有文件正常覆盖（更新场景：SKILL.md、reference/、examples/）
+- 复制策略：先删除目标中非 `users/` 的内容，再从源复制（确保旧文件不残留）
+
+**MCP 配置关闭逻辑**（整合进 sync）：
+
+| 客户端 | 配置文件 | 操作 |
+|--------|---------|------|
+| Claude | `~/.claude.json` | `mcpServers.<server>.disabled = true` |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers.<server>.disabled = true` |
+| Codex | `~/.codex/config.toml` | `mcp_servers.<server>.disabled = true` |
+
+复用 `converter/config_disabler.py` 的 `disable_server()` 函数。幂等：已 disabled 则跳过。
 
 ### mcp2cli install 流程
 
@@ -104,29 +128,43 @@ mcp2cli install mcp-atlassian
         ▼
 ┌─ Step Pipeline ────────────────────────┐
 │                                        │
-│  Step 0: mcp install                   │
-│    mcp2cli mcp install mcp-atlassian   │
+│  Step 0: mcp add                       │
+│    mcp2cli mcp add mcp-atlassian       │
 │    (AI 搜索 + 交互补全 + 安装 +        │
 │     写 servers.yaml)                   │
+│    已存在时：跳过写入，直接继续         │
 │    失败 → 警告 + 跳过后续步骤           │
 │         │ 成功                          │
 │         ▼                              │
-│  Step 1: scan                          │
+│  Step 1: preset-check                  │
+│    检查远程 preset 仓库是否有预设       │
+│    有 → 提示用户拉取                    │
+│      → Y: 下载 preset, 标记后续         │
+│           scan/generate 为 skip        │
+│      → N: 继续正常流程                  │
+│    无/网络失败 → 继续正常流程            │
+│    详见 16-preset-skills.md            │
+│         │                              │
+│         ▼                              │
+│  Step 2: scan                          │
 │    mcp2cli scan mcp-atlassian          │
+│    (preset 成功时自动 skip)             │
 │    失败 → 警告 + 跳过后续步骤           │
 │         │ 成功                          │
 │         ▼                              │
-│  Step 2: generate cli                  │
+│  Step 3: generate cli                  │
 │    mcp2cli generate cli mcp-atlassian  │
+│    (preset 成功时自动 skip)             │
 │    失败 → 警告 + 跳过后续步骤           │
 │         │ 成功                          │
 │         ▼                              │
-│  Step 3: generate skill                │
+│  Step 4: generate skill                │
 │    mcp2cli generate skill mcp-atlassian│
+│    (preset 成功时自动 skip)             │
 │    失败 → 警告 + 跳过后续步骤           │
 │         │ 成功                          │
 │         ▼                              │
-│  Step 4: skill sync                    │
+│  Step 5: skill sync                    │
 │    mcp2cli skill sync mcp-atlassian    │
 │    失败 → 警告                          │
 │                                        │
@@ -135,10 +173,10 @@ mcp2cli install mcp-atlassian
 
 ## 二、命令接口
 
-### 2.1 mcp2cli mcp install（安装并注册 MCP server）
+### 2.1 mcp2cli mcp add（注册 MCP server）
 
 ```bash
-mcp2cli mcp install <server-name> [OPTIONS]
+mcp2cli mcp add <server-name> [OPTIONS]
 
 Arguments:
   server-name          MCP server 名称（如 mcp-atlassian, playwright）
@@ -153,7 +191,7 @@ Options:
 
 写入目标：`~/.agents/mcp2cli/servers.yaml`（daemon 配置文件，格式见下文）。
 
-### 2.2 mcp2cli skill sync（同步 skill 到各 AI 客户端）
+### 2.2 mcp2cli skill sync（同步 skill 到各 AI 客户端 + 关闭 MCP 配置）
 
 ```bash
 mcp2cli skill sync [server-name] [OPTIONS]
@@ -165,8 +203,9 @@ Arguments:
 Options:
   --targets            同步到哪些客户端 (默认: claude,cursor,codex)
                        可选值: claude, cursor, codex, all
-  --dry-run            只展示将要创建的软链接，不实际操作
-  --force              覆盖已存在的软链接（默认跳过）
+  --skip-disable       不关闭对应客户端的 MCP 配置
+  --dry-run            只展示将要执行的操作，不实际复制/修改
+  --force              强制覆盖已存在的目标目录（默认也覆盖非 users/ 内容）
 ```
 
 **各客户端 skill 目录：**
@@ -177,7 +216,7 @@ Options:
 | Cursor | `~/.cursor/skills/<server>/` |
 | Codex | `~/.codex/skills/<server>/` |
 
-所有软链接均指向 `~/.agents/mcp2cli/skills/<server>/`（实际存储位置）。
+skill 文件从 `~/.agents/mcp2cli/skills/<server>/`（实际存储位置）复制到各客户端目录。复制时跳过 `users/` 子目录。
 
 ### 2.3 mcp2cli install（一键全流程）
 
@@ -188,16 +227,17 @@ Arguments:
   server-name          MCP server 名称（如 mcp-atlassian, playwright）
 
 Options:
-  --env KEY=VALUE      同 mcp install，透传给 mcp install 阶段
+  --env KEY=VALUE      同 mcp add，透传给 mcp add 阶段
   --skill-targets      skill sync 的目标客户端 (默认: claude,cursor,codex)
+  --no-preset          跳过 preset 检查，强制走 AI 生成流程
   --dry-run            只展示将要写入的内容，不实际修改文件（不执行 pipeline）
   --yes                跳过确认提示，直接执行
-  --skip-generate      跳过 pipeline（等价于直接使用 mcp2cli mcp install）
+  --skip-generate      跳过 pipeline（等价于直接使用 mcp2cli mcp add）
 ```
 
 ### 2.4 servers.yaml 格式
 
-`mcp2cli mcp install` 的写入目标，由 daemon 启动 MCP server 时读取：
+`mcp2cli mcp add` 的写入目标，由 daemon 启动 MCP server 时读取：
 
 ```yaml
 # ~/.agents/mcp2cli/servers.yaml
@@ -358,7 +398,7 @@ Proceed? [Y/n]
 
 ## 五、Step Pipeline（install 专属）
 
-`mcp2cli install` 通过统一的 Step Pipeline 依次执行 mcp install → scan → generate cli → generate skill → skill sync。
+`mcp2cli install` 通过统一的 Step Pipeline 依次执行 mcp add → preset-check → scan → generate cli → generate skill → skill sync。
 
 ### 5.1 Step 数据结构
 
@@ -370,6 +410,9 @@ class Step:
     retry_cmd: str      # 失败时提示用户的手动重试命令
     depends_on: list[str] = field(default_factory=list)
     # depends_on 列表中任意一步失败，本步自动跳过
+    skip_if: list[str] = field(default_factory=list)
+    # skip_if 列表中任意一步成功，本步自动跳过（标记为 skipped/True，不阻塞后续）
+    # 详见 16-preset-skills.md
 ```
 
 ### 5.2 Pipeline 定义与 Runner
@@ -377,42 +420,59 @@ class Step:
 ```python
 pipeline: list[Step] = [
     Step(
-        name="mcp-install",
-        run=lambda: run_mcp_install(server_name),
-        retry_cmd=f"mcp2cli mcp install {server_name}",
+        name="mcp-add",
+        run=lambda: run_mcp_add(server_name),
+        retry_cmd=f"mcp2cli mcp add {server_name}",
+    ),
+    Step(
+        name="preset-check",
+        run=lambda: check_and_pull_preset(server_name),
+        retry_cmd=f"mcp2cli preset pull {server_name}",
+        depends_on=["mcp-add"],
     ),
     Step(
         name="scan",
         run=lambda: run_scan(server_name),
         retry_cmd=f"mcp2cli scan {server_name}",
-        depends_on=["mcp-install"],   # mcp install 失败则跳过
+        depends_on=["mcp-add"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="generate-cli",
         run=lambda: run_generate_cli(server_name),
         retry_cmd=f"mcp2cli generate cli {server_name}",
-        depends_on=["scan"],          # scan 失败则跳过
+        depends_on=["scan"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="generate-skill",
         run=lambda: run_generate_skill(server_name),
         retry_cmd=f"mcp2cli generate skill {server_name}",
         depends_on=["generate-cli"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="skill-sync",
         run=lambda: run_skill_sync(server_name),
         retry_cmd=f"mcp2cli skill sync {server_name}",
         depends_on=["generate-skill"],
+        # 不设 skip_if，始终执行（preset 时 generate-skill 被标记为 True）
     ),
 ]
 
-# Runner（无需 reduce/chain，for 循环 + 结构化 Step 即是最优平衡）
+# Runner
 results: dict[str, bool] = {}
 for step in pipeline:
+    # 依赖失败 → 跳过
     if any(not results.get(dep) for dep in step.depends_on):
         warn(f"Skipping {step.name}: dependency failed")
         results[step.name] = False
+        continue
+
+    # 条件跳过（preset 成功 → scan/generate 无需执行）
+    if any(results.get(s) for s in step.skip_if):
+        info(f"Skipping {step.name}: preset used")
+        results[step.name] = True   # 标记为成功，不阻塞后续依赖
         continue
 
     ok = step.run()
@@ -424,13 +484,16 @@ for step in pipeline:
 
 **设计说明**：
 - `depends_on` 让依赖关系声明在数据里而非散落在 if-else 中
+- `skip_if` 实现条件跳过：preset-check 成功时，scan/generate 步骤被标记为 skipped（True），不阻塞依赖它们的 skill-sync。详见 [16-preset-skills.md](16-preset-skills.md)
+- `mcp-add` 步骤：server 已存在时打印提示并返回 `True`（视为成功），pipeline 正常继续；仅 AI 搜索失败或写入失败才返回 `False`
+- `preset-check` 步骤：返回 False 不算失败（不阻塞后续），只表示需要继续正常流程
 - 每步失败只打警告，不中止 pipeline（除非后续步骤有依赖）
 - Runner 不感知具体步骤内容，仅负责调度和错误收集
 
 ### 5.3 跳过 Pipeline
 
 ```bash
-# 只安装 MCP server，等价于直接用 mcp2cli mcp install
+# 只注册 MCP server，等价于直接用 mcp2cli mcp add
 mcp2cli install mcp-atlassian --skip-generate
 ```
 
@@ -486,9 +549,10 @@ $ mcp2cli install mcp-atlassian
    Written to ~/.agents/mcp2cli/skills/mcp-atlassian/
 
 🔗 Syncing skill to AI clients...
-   ✓ ~/.claude/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ✓ ~/.cursor/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ✓ ~/.codex/skills/mcp-atlassian   → ~/.agents/mcp2cli/skills/mcp-atlassian/
+   ✓ ~/.claude/skills/mcp-atlassian  copied
+   ✓ ~/.cursor/skills/mcp-atlassian  copied
+   ✓ ~/.codex/skills/mcp-atlassian   copied
+   MCP disabled in: claude, cursor
 
 ✅ Installation complete!
    Next steps:
@@ -504,10 +568,8 @@ $ mcp2cli install mcp-atlassian
 🔍 Searching for mcp-atlassian installation info...
    Found: mcp-atlassian (PyPI)
 
-📝 Will write to ~/.agents/mcp2cli/servers.yaml:
-   ⊘ mcp-atlassian already exists, skipped
-
-   Proceed with pipeline anyway? [Y/n] y
+⊘ mcp-atlassian already exists in servers.yaml, skipping write.
+   Use --force to overwrite config.
 
 🔧 Scanning mcp-atlassian...
    ...
@@ -525,7 +587,7 @@ $ mcp2cli install mcp-jiraa
      - mcp-atlassian (includes Jira + Confluence)
 
    You can also provide config manually:
-     mcp2cli mcp install mcp-jiraa --command uvx --args mcp-jiraa
+     mcp2cli mcp add mcp-jiraa --command uvx --args mcp-jiraa
 ```
 
 ### 6.4 预设 env 跳过交互
@@ -544,7 +606,7 @@ $ mcp2cli install mcp-atlassian \
 🔧 Scanning mcp-atlassian... 65 tools found.
 🤖 Generating CLI command tree... 65/65 tools ✓
 🧩 Generating skill definitions... ✓
-🔗 Syncing skill... claude ✓  cursor ✓  codex ✓
+🔗 Syncing skill... claude ✓  cursor ✓  codex ✓  MCP disabled ✓
 
 ✅ Installation complete!
 ```
@@ -552,18 +614,26 @@ $ mcp2cli install mcp-atlassian \
 ### 6.5 单独同步 skill
 
 ```
-# 已有 skill，只想同步软链接到各客户端
+# 已有 skill，只想同步到各客户端（复制 + 关闭 MCP）
 $ mcp2cli skill sync mcp-atlassian
 
 🔗 Syncing skill to AI clients...
-   ✓ ~/.claude/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ✓ ~/.cursor/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ⊘ ~/.codex/skills/mcp-atlassian   already exists, skipped
+   ✓ ~/.claude/skills/mcp-atlassian  copied
+   ✓ ~/.cursor/skills/mcp-atlassian  copied
+   ✓ ~/.codex/skills/mcp-atlassian   copied
+   MCP disabled in: claude, cursor
 
 # 同步所有已生成 skill 的 server
 $ mcp2cli skill sync
-   mcp-atlassian: claude ✓  cursor ✓  codex ✓
+   mcp-atlassian: claude ✓  cursor ✓  codex ✓  MCP disabled ✓
    playwright:    claude ✓  cursor ✓  codex ✓
+
+# 只复制 skill，不关闭 MCP 配置
+$ mcp2cli skill sync mcp-atlassian --skip-disable
+   ✓ ~/.claude/skills/mcp-atlassian  copied
+   ✓ ~/.cursor/skills/mcp-atlassian  copied
+   ✓ ~/.codex/skills/mcp-atlassian   copied
+   MCP config not modified (--skip-disable)
 ```
 
 ### 6.6 Dry-run 模式
@@ -586,10 +656,14 @@ $ mcp2cli install mcp-atlassian --dry-run
        JIRA_URL: https://mycompany.atlassian.net
        JIRA_API_TOKEN: ...
 
-   [DRY RUN] Would symlink:
-   ~/.claude/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ~/.cursor/skills/mcp-atlassian  → ~/.agents/mcp2cli/skills/mcp-atlassian/
-   ~/.codex/skills/mcp-atlassian   → ~/.agents/mcp2cli/skills/mcp-atlassian/
+   [DRY RUN] Would copy skill files to:
+   ~/.claude/skills/mcp-atlassian
+   ~/.cursor/skills/mcp-atlassian
+   ~/.codex/skills/mcp-atlassian
+
+   [DRY RUN] Would disable MCP in:
+   ~/.claude.json: set mcp-atlassian.disabled = true
+   ~/.cursor/mcp.json: set mcp-atlassian.disabled = true
 
    No files were modified.
 ```
@@ -605,7 +679,8 @@ $ mcp2cli install mcp-atlassian --dry-run
 | generate 失败 | 打印警告，提示手动重试 |
 | 所有目标配置均已存在 | 提示全部跳过，询问是否要 `--force` 覆盖 |
 | skill sync：skill 文件不存在 | 报错，提示先运行 `mcp2cli generate skill <server>` |
-| skill sync：客户端目录不存在 | 自动创建目录后再创建软链接 |
+| skill sync：客户端目录不存在 | 自动创建目录后再复制文件 |
+| skill sync：MCP 配置关闭失败 | 打印警告，不阻断同步流程 |
 
 ## 八、代码实现位置
 
@@ -617,19 +692,19 @@ mcp2cli/
 │   ├── ai_search.py           # AI 搜索安装信息（claude -p 调用、prompt 构造、JSON 解析）
 │   ├── servers_writer.py      # 写入 ~/.agents/mcp2cli/servers.yaml
 │   ├── interactive.py         # 交互式 env 输入（密码模式、可选跳过）
-│   ├── skill_sync.py          # skill sync：创建/更新各客户端 skill 目录的软链接
+│   ├── skill_sync.py          # skill sync：复制 skill 到各客户端 + 关闭 MCP 配置
 │   └── pipeline.py            # Step dataclass + pipeline runner
 ```
 
 ## 九、与现有模块的关系
 
 ```
-mcp2cli mcp install <server>   mcp2cli skill sync [server]    mcp2cli install <server>
+mcp2cli mcp add <server>      mcp2cli skill sync [server]    mcp2cli install <server>
     │                               │                               │
-    │                               │                               ├─ 调用 mcp install
+    │                               │                               ├─ 调用 mcp add
     │                               │                               │
     ├── installer/ai_search.py      └── installer/skill_sync.py     └─ installer/pipeline.py
-    │     调用 claude -p                  创建 symlink                    Step pipeline runner
+    │     调用 claude -p                  复制 skill + disable MCP       Step pipeline runner
     │
     ├── installer/servers_writer.py
     │     写入 servers.yaml

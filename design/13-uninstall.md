@@ -10,10 +10,10 @@
 
 | 安装/转换命令 | 反向命令 | 职责 |
 |------|------|------|
-| `mcp2cli install <server>` | `mcp2cli remove <server>` | 全流程清理：symlink → skill → cli → tools → servers.yaml → (可选)package |
+| `mcp2cli install <server>` | `mcp2cli remove <server>` | 全流程清理：skill 复制文件 → skill 源文件 → cli → tools → servers.yaml → (可选)package |
 | `mcp2cli convert <server>` | `mcp2cli remove <server>` | 同上 + 在客户端配置中**重新启用**被 disable 的 MCP server |
 | `mcp2cli mcp install <server>` | `mcp2cli mcp remove <server>` | 仅从 servers.yaml 移除配置 |
-| `mcp2cli skill sync <server>` | `mcp2cli skill unsync <server>` | 仅移除客户端 skill 目录的 symlink |
+| `mcp2cli skill sync <server>` | `mcp2cli skill unsync <server>` | 仅移除客户端 skill 目录的复制文件 + 重新启用 MCP 配置 |
 
 **别名**：`mcp2cli uninstall` 等价于 `mcp2cli remove`。
 
@@ -23,7 +23,7 @@
 
 | 步骤 | 清理内容 | 对应 install/convert 步骤 |
 |------|---------|--------------------------|
-| 1. skill unsync | 删除各客户端 skill 目录的 symlink | skill sync |
+| 1. skill unsync | 删除各客户端 skill 目录的复制文件 + 重新启用 MCP 配置 | skill sync |
 | 2. 删除 skill 文件 | 删除 `~/.agents/mcp2cli/skills/<server>/` 目录 | generate skill |
 | 3. 删除 cli 映射 | 删除 `~/.agents/mcp2cli/cli/<server>.yaml` | generate cli |
 | 4. 删除 tools 缓存 | 删除 `~/.agents/mcp2cli/tools/<server>.json` | scan |
@@ -44,7 +44,7 @@ Arguments:
   server-name          要移除的 MCP server 名称
 
 Options:
-  --keep-config        保留 servers.yaml 中的配置（仅清理生成文件和 symlink）
+  --keep-config        保留 servers.yaml 中的配置（仅清理生成文件和 skill 复制目录）
   --skip-re-enable     不在客户端配置中重新启用被 disable 的 server
   --purge-package      同时卸载底层 package（默认不卸载）
   --force / -f         跳过确认提示
@@ -66,17 +66,18 @@ Options:
 
 仅从 `~/.agents/mcp2cli/servers.yaml` 中删除指定 server 条目，不清理任何生成文件。
 
-### 3.3 mcp2cli skill unsync（仅移除 symlink）
+### 3.3 mcp2cli skill unsync（移除 skill 文件 + 重新启用 MCP）
 
 ```bash
 mcp2cli skill unsync [server-name] [OPTIONS]
 
 Arguments:
-  server-name          要移除 symlink 的 server 名称
-                       省略则移除所有 server 的 symlink
+  server-name          要移除 skill 文件的 server 名称
+                       省略则移除所有 server 的 skill 文件
 
 Options:
   --targets            从哪些客户端移除 (默认: claude,cursor,codex)
+  --skip-re-enable     不重新启用客户端的 MCP 配置
   --dry-run            仅显示将执行的操作
 ```
 
@@ -91,7 +92,7 @@ mcp2cli remove mcp-atlassian
 ┌─ 0. 预检 ──────────────────────────────────────┐
 │  1. 在 servers.yaml 中查找 server 是否存在       │
 │  2. 扫描生成文件是否存在（tools/, cli/, skills/）│
-│  3. 扫描客户端 symlink 是否存在                  │
+│  3. 扫描客户端 skill 复制目录是否存在              │
 │  4. 扫描客户端配置中是否有被 disable 的该 server  │
 │  5. 汇总所有将要执行的操作                       │
 │                                                 │
@@ -108,11 +109,13 @@ mcp2cli remove mcp-atlassian
 ┌─ 2. Step Pipeline ─────────────────────────────┐
 │                                                │
 │  Step 1: skill unsync                          │
-│    删除各客户端 skill 目录的 symlink             │
-│    - ~/.claude/skills/<server>                 │
-│    - ~/.cursor/skills/<server>                 │
-│    - ~/.codex/skills/<server>                  │
-│    - ~/.agents/skills/<server>                 │
+│    删除各客户端 skill 目录的复制文件               │
+│    - ~/.claude/skills/<server>   (删除目录)     │
+│    - ~/.cursor/skills/<server>   (删除目录)     │
+│    - ~/.codex/skills/<server>    (删除目录)     │
+│    - ~/.agents/skills/<server>   (删除目录)     │
+│    同时重新启用各客户端的 MCP 配置                │
+│    （移除 disabled: true，与 sync 的 disable 对称）│
 │         │                                      │
 │         ▼                                      │
 │  Step 2: 删除 skill 文件                        │
@@ -160,9 +163,12 @@ class RemovalPlan:
     cli_yaml: Path | None          # ~/.agents/mcp2cli/cli/<server>.yaml
     skills_dir: Path | None        # ~/.agents/mcp2cli/skills/<server>/
 
-    # symlink
-    skill_symlinks: list[Path]     # 各客户端 skill 目录中的 symlink
-    agents_symlink: Path | None    # ~/.agents/skills/<server>
+    # 用户自定义内容
+    users_has_content: bool        # users/ 目录是否包含用户文件（排除 .gitkeep）
+
+    # skill 复制目录
+    skill_copies: list[Path]       # 各客户端 skill 目录中的复制文件
+    agents_skill_dir: Path | None  # ~/.agents/skills/<server>
 
     # 配置
     servers_yaml_entry: bool       # servers.yaml 中是否存在
@@ -260,11 +266,11 @@ def build_remove_pipeline(
 
     steps = []
 
-    # Step 1: 移除 skill symlink
-    if plan.skill_symlinks or plan.agents_symlink:
+    # Step 1: 移除 skill 复制文件 + 重新启用 MCP 配置
+    if plan.skill_copies or plan.agents_skill_dir:
         steps.append(Step(
             name="skill-unsync",
-            run=lambda: unsync_skills(plan.server_name, plan.skill_symlinks, plan.agents_symlink),
+            run=lambda: unsync_skills(plan.server_name, plan.skill_copies, plan.agents_skill_dir),
             retry_cmd=f"mcp2cli skill unsync {plan.server_name}",
         ))
 
@@ -274,7 +280,7 @@ def build_remove_pipeline(
             name="delete-skills",
             run=lambda: delete_dir(plan.skills_dir),
             retry_cmd=f"rm -rf {plan.skills_dir}",
-            depends_on=["skill-unsync"] if plan.skill_symlinks else [],
+            depends_on=["skill-unsync"] if plan.skill_copies else [],
         ))
 
     # Step 3: 删除 cli 映射
@@ -302,6 +308,8 @@ def build_remove_pipeline(
         ))
 
     # Step 6: 重新启用客户端配置
+    # 注意：skill unsync 内部已处理 re-enable（与 sync 的 disable 对称）
+    # 此步骤仅作为兜底，处理 unsync 可能遗漏的场景（如配置源不在 targets 列表中）
     if plan.disabled_sources and not skip_re_enable:
         steps.append(Step(
             name="re-enable-clients",
@@ -332,33 +340,62 @@ def build_remove_pipeline(
 - 仅存在的资源才生成对应 Step，避免空操作
 - re-enable 和 purge-package 是独立操作，不依赖其他步骤
 
-## 六、Symlink 安全检查
+## 六、Skill 目录安全检查
 
-删除 symlink 前进行安全验证，防止误删用户手动创建的文件：
+删除 skill 目录前进行安全验证，防止误删用户手动创建的文件：
 
 ```python
-def safe_remove_symlink(symlink_path: Path, expected_target_prefix: Path) -> bool:
+def safe_remove_skill_dir(skill_dir: Path, expected_server_name: str) -> bool:
     """
-    安全删除 symlink。
+    安全删除 skill 目录（由 skill sync 复制的）。
 
     仅在以下条件同时满足时才删除：
-    1. 路径是一个 symlink（而非普通文件/目录）
-    2. symlink 的目标以 expected_target_prefix 开头
-       （即指向 ~/.agents/mcp2cli/skills/<server>/）
+    1. 路径是一个目录（而非 symlink 或普通文件）
+    2. 目录下存在 SKILL.md
+    3. SKILL.md 的 frontmatter 中 name 字段与 expected_server_name 一致
+       （即确认是 mcp2cli 管理的 skill 文件）
+
+    删除时保留 users/ 子目录不删（若存在）。
+    若 users/ 是目录中唯一剩余内容，则删除整个目录。
 
     Returns:
         True 删除成功，False 跳过（不满足条件时打印警告）
     """
-    if not symlink_path.is_symlink():
-        warn(f"Skipping {symlink_path}: not a symlink")
+    if not skill_dir.is_dir():
+        warn(f"Skipping {skill_dir}: not a directory")
         return False
 
-    target = symlink_path.resolve()
-    if not str(target).startswith(str(expected_target_prefix)):
-        warn(f"Skipping {symlink_path}: points to {target}, not managed by mcp2cli")
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.exists():
+        warn(f"Skipping {skill_dir}: no SKILL.md found, not managed by mcp2cli")
         return False
 
-    symlink_path.unlink()
+    # 检查 frontmatter 中的 name 字段
+    name = parse_frontmatter_name(skill_md)
+    if name != expected_server_name:
+        warn(f"Skipping {skill_dir}: SKILL.md name '{name}' != '{expected_server_name}'")
+        return False
+
+    # 删除非 users/ 的内容
+    for item in skill_dir.iterdir():
+        if item.name == "users":
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+    # 若目录只剩 users/ 或已空，删除整个目录
+    remaining = list(skill_dir.iterdir())
+    if not remaining:
+        skill_dir.rmdir()
+    elif len(remaining) == 1 and remaining[0].name == "users":
+        # users/ 非空时保留，空时一起删
+        users_dir = remaining[0]
+        users_content = [f for f in users_dir.iterdir() if f.name != ".gitkeep"]
+        if not users_content:
+            shutil.rmtree(skill_dir)
+
     return True
 ```
 
@@ -383,7 +420,8 @@ def remove_from_servers_yaml(server_name: str) -> bool:
 |------|---------|
 | server 在任何位置都不存在 | 报错退出，提示用 `mcp2cli list` 查看可用 server |
 | 部分文件已手动删除 | 跳过不存在的文件，不报错（幂等） |
-| symlink 不指向 mcp2cli 管理的目录 | 跳过该 symlink，打印警告 |
+| 目录不是 mcp2cli 管理的 skill | 跳过该目录，打印警告（通过 SKILL.md frontmatter name 字段验证） |
+| `users/` 目录非空（排除 `.gitkeep`） | 打印警告，需 `--force` 才能继续删除，否则中止 |
 | 客户端配置文件无写入权限 | re-enable 步骤报警告，提示手动移除 `disabled` 字段 |
 | daemon 未运行 | 跳过 daemon disconnect，打印提示 |
 | `--purge-package` 但无法确定卸载命令 | 打印警告，提示手动卸载 |
@@ -401,11 +439,11 @@ $ mcp2cli remove mcp-atlassian
 
 📋 The following will be removed:
 
-  Symlinks:
-    ~/.claude/skills/mcp-atlassian    → ~/.agents/mcp2cli/skills/mcp-atlassian/
-    ~/.cursor/skills/mcp-atlassian    → ~/.agents/mcp2cli/skills/mcp-atlassian/
-    ~/.codex/skills/mcp-atlassian     → ~/.agents/mcp2cli/skills/mcp-atlassian/
-    ~/.agents/skills/mcp-atlassian    → ~/.agents/mcp2cli/skills/mcp-atlassian/
+  Skill copies:
+    ~/.claude/skills/mcp-atlassian    (skill copy)
+    ~/.cursor/skills/mcp-atlassian    (skill copy)
+    ~/.codex/skills/mcp-atlassian     (skill copy)
+    ~/.agents/skills/mcp-atlassian    (skill copy)
 
   Generated files:
     ~/.agents/mcp2cli/skills/mcp-atlassian/  (SKILL.md + reference/ + examples/)
@@ -417,11 +455,12 @@ $ mcp2cli remove mcp-atlassian
 
   Proceed? [Y/n] y
 
-🔗 Removing skill symlinks...
+🔗 Removing skill files...
    ✓ ~/.claude/skills/mcp-atlassian  removed
    ✓ ~/.cursor/skills/mcp-atlassian  removed
    ✓ ~/.codex/skills/mcp-atlassian   removed
    ✓ ~/.agents/skills/mcp-atlassian  removed
+   MCP re-enabled in: claude, cursor
 
 🧩 Removing skill files...
    ✓ ~/.agents/mcp2cli/skills/mcp-atlassian/  removed
@@ -448,8 +487,8 @@ $ mcp2cli remove mcp-atlassian
 
 📋 The following will be removed:
 
-  Symlinks:
-    ~/.claude/skills/mcp-atlassian  (4 symlinks)
+  Skill copies:
+    ~/.claude/skills/mcp-atlassian  (4 skill copies)
 
   Generated files:
     skills/, cli/, tools/  (3 items)
@@ -463,7 +502,7 @@ $ mcp2cli remove mcp-atlassian
 
   Proceed? [Y/n] y
 
-🔗 Removing skill symlinks... ✓
+🔗 Removing skill files... ✓
 🧩 Removing skill files... ✓
 📝 Removing generated files... ✓
 ⚙️  Removing from servers.yaml... ✓
@@ -487,7 +526,7 @@ $ mcp2cli remove mcp-atlassian --dry-run
 
 [DRY RUN] Would perform the following:
 
-  Remove symlinks:
+  Remove skill copies:
     ~/.claude/skills/mcp-atlassian
     ~/.cursor/skills/mcp-atlassian
     ~/.codex/skills/mcp-atlassian
@@ -570,7 +609,7 @@ $ mcp2cli remove mcp-jiraa
 $ mcp2cli remove mcp-atlassian --keep-config
 
 📋 The following will be removed:
-  Symlinks: (4 items)
+  Skill copies: (4 items)
   Generated files: skills/, cli/, tools/
 
   Config:
@@ -578,7 +617,7 @@ $ mcp2cli remove mcp-atlassian --keep-config
 
   Proceed? [Y/n] y
 
-... (清理 symlink 和生成文件)
+... (清理 skill 复制目录和生成文件)
 
 ✅ Generated files removed. servers.yaml config preserved.
    Run `mcp2cli install mcp-atlassian --skip-generate` to regenerate.
@@ -594,14 +633,14 @@ mcp2cli/
 ├── remover/                         # 新增包
 │   ├── __init__.py
 │   ├── scanner.py                   # 预检扫描：收集所有 server 产物 → RemovalPlan
-│   ├── cleaner.py                   # 文件删除、symlink 移除（含安全检查）
+│   ├── cleaner.py                   # 文件删除、skill 目录移除（含安全检查）
 │   ├── config_re_enabler.py         # 在客户端配置中移除 disabled（复用 converter/ 的原子写入）
 │   ├── package_purger.py            # 推断卸载命令并执行
 │   └── pipeline.py                  # remove 专属 pipeline 组装
 ├── installer/                       # 已有，复用
 │   ├── pipeline.py                  # Step dataclass + runner（共享）
 │   ├── servers_writer.py            # 读写 servers.yaml（扩展 remove 方法）
-│   └── skill_sync.py               # 扩展 unsync 方法
+│   └── skill_sync.py               # 扩展 unsync 方法（删除目录 + re-enable MCP）
 ├── converter/                       # 已有，复用原子写入逻辑
 │   └── config_disabler.py           # re_enabler 复用其原子写入策略
 ```
@@ -619,10 +658,10 @@ def scan_removal_targets(server_name: str) -> RemovalPlan:
     - ~/.agents/mcp2cli/tools/<server>.json
     - ~/.agents/mcp2cli/cli/<server>.yaml
     - ~/.agents/mcp2cli/skills/<server>/
-    - ~/.claude/skills/<server>  (symlink)
-    - ~/.cursor/skills/<server>  (symlink)
-    - ~/.codex/skills/<server>   (symlink)
-    - ~/.agents/skills/<server>  (symlink)
+    - ~/.claude/skills/<server>  (skill 复制目录)
+    - ~/.cursor/skills/<server>  (skill 复制目录)
+    - ~/.codex/skills/<server>   (skill 复制目录)
+    - ~/.agents/skills/<server>  (skill 复制目录)
     - ~/.agents/mcp2cli/servers.yaml 中的条目
     - ~/.claude.json 等客户端配置中 disabled 的条目
     """
@@ -633,10 +672,10 @@ def scan_removal_targets(server_name: str) -> RemovalPlan:
 ```python
 def unsync_skills(
     server_name: str,
-    symlinks: list[Path],
-    agents_symlink: Path | None,
+    skill_copies: list[Path],
+    agents_skill_dir: Path | None,
 ) -> bool:
-    """移除所有 skill symlink，含安全检查。"""
+    """移除所有 skill 复制目录 + 重新启用 MCP 配置，含安全检查。"""
 
 def delete_skills_dir(skills_dir: Path) -> bool:
     """删除 skill 文件目录。"""
@@ -688,7 +727,7 @@ mcp2cli remove <server>
     │     调用 config/reader.py 枚举配置
     │
     ├── remover/cleaner.py
-    │     删除 symlink + 生成文件
+    │     删除 skill 复制目录 + 生成文件
     │     调用 installer/skill_sync.py 的 unsync 逻辑
     │
     ├── installer/servers_writer.py    ← 扩展

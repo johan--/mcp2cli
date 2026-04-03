@@ -31,9 +31,10 @@ Arguments:
 Options:
   --source SOURCE      指定从哪个配置读取 (claude, cursor, codex, auto)
                        默认 auto：按 claude → cursor → codex 顺序搜索
-  --skip-disable       不关闭原始客户端配置中的 server
+  --skip-disable       不关闭原始客户端配置中的 server（透传给 skill sync）
   --skill-targets      skill sync 目标客户端 (默认: claude,cursor,codex)
                        可选值: claude, cursor, codex, all
+  --no-preset          跳过 preset 检查，强制走 AI 生成流程
   --dry-run            只展示操作预览，不实际修改
   --yes                跳过确认提示
   --force              servers.yaml 中已存在时覆盖
@@ -59,21 +60,27 @@ mcp2cli convert mcp-atlassian
 └───────────────────┬───────────────────────────────┘
                     │
                     ▼
-┌─ Step 2-5: Pipeline（复用已有模块）───────────────┐
-│  Step 2: scan        → scanner.py                │
-│  Step 3: generate cli → generator/cli_gen.py     │
-│  Step 4: generate skill → generator/skill_gen.py │
-│  Step 5: skill sync  → installer/skill_sync.py   │
+┌─ Step 2: preset-check ───────────────────────────┐
+│  检查远程 preset 仓库是否有预设                     │
+│  有 → 提示用户拉取                                │
+│    → Y: 下载 preset, 标记 scan/generate 为 skip  │
+│    → N: 继续正常流程                               │
+│  无/网络失败 → 继续正常流程                         │
+│  详见 16-preset-skills.md                         │
 └───────────────────┬───────────────────────────────┘
                     │
                     ▼
-┌─ Step 6: 关闭原始配置 ───────────────────────────┐
-│  在所有包含该 server 的客户端配置中设置 disabled   │
-│  仅在前面所有步骤成功后才执行                      │
-│  Claude JSON:  "disabled": true                  │
-│  Cursor JSON:  "disabled": true                  │
-│  Codex TOML:   disabled = true                   │
-└──────────────────────────────────────────────────┘
+┌─ Step 3-6: Pipeline（复用已有模块）───────────────┐
+│  Step 3: scan        → scanner.py                │
+│    (preset 成功时自动 skip)                        │
+│  Step 4: generate cli → generator/cli_gen.py     │
+│    (preset 成功时自动 skip)                        │
+│  Step 5: generate skill → generator/skill_gen.py │
+│    (preset 成功时自动 skip)                        │
+│  Step 6: skill sync  → installer/skill_sync.py   │
+│    复制 skill 到各客户端 + 关闭对应 MCP 配置      │
+│    （整合了 disable 逻辑，不再需要独立步骤）       │
+└───────────────────┬───────────────────────────────┘
 ```
 
 ### 3.1 Step 0 配置提取
@@ -204,7 +211,7 @@ disabled = true
 
 ## 四、Pipeline 定义
 
-复用 `installer/pipeline.py` 的 Step dataclass 和 runner。
+复用 `installer/pipeline.py` 的 Step dataclass（含 `skip_if` 扩展）和 runner。
 
 ```python
 pipeline: list[Step] = [
@@ -214,42 +221,49 @@ pipeline: list[Step] = [
         retry_cmd=f"mcp2cli convert {server_name}",
     ),
     Step(
+        name="preset-check",
+        run=lambda: check_and_pull_preset(server_name),
+        retry_cmd=f"mcp2cli preset pull {server_name}",
+        depends_on=["extract-config"],
+    ),
+    Step(
         name="scan",
         run=lambda: run_scan(server_name),
         retry_cmd=f"mcp2cli scan {server_name}",
         depends_on=["extract-config"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="generate-cli",
         run=lambda: run_generate_cli(server_name),
         retry_cmd=f"mcp2cli generate cli {server_name}",
         depends_on=["scan"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="generate-skill",
         run=lambda: run_generate_skill(server_name),
         retry_cmd=f"mcp2cli generate skill {server_name}",
         depends_on=["generate-cli"],
+        skip_if=["preset-check"],       # preset 成功时跳过
     ),
     Step(
         name="skill-sync",
-        run=lambda: run_skill_sync(server_name),
+        run=lambda: run_skill_sync(server_name, skip_disable=skip_disable),
         retry_cmd=f"mcp2cli skill sync {server_name}",
         depends_on=["generate-skill"],
-    ),
-    Step(
-        name="disable-in-clients",
-        run=lambda: disable_in_all_sources(server_name, found_sources),
-        retry_cmd='(手动在配置文件中添加 "disabled": true)',
-        depends_on=["skill-sync"],  # 仅在全部成功后才关闭
+        # skill sync 内部完成复制 + disable MCP，不再需要独立 disable 步骤
+        # 不设 skip_if，始终执行
     ),
 ]
 ```
 
 **设计说明**：
 
-- `disable-in-clients` 依赖 `skill-sync`，确保只有在 skill 完全就绪后才关闭原配置
-- 使用 `--skip-disable` 时不添加最后一个 Step
+- `skill-sync` 内部整合了 disable MCP 逻辑，确保 skill 复制成功后才关闭原配置
+- `preset-check` 步骤：返回 True 时，scan/generate-cli/generate-skill 通过 `skip_if` 自动跳过（标记为 True），不阻塞 skill-sync。详见 [16-preset-skills.md](16-preset-skills.md)
+- 使用 `--skip-disable` 时，透传给 skill sync，跳过 disable 步骤
+- 使用 `--no-preset` 时，preset-check 步骤直接返回 False，继续正常流程
 - 每步失败只打警告，不中止 pipeline（除非后续步骤有依赖）
 
 ## 五、代码结构
@@ -265,7 +279,7 @@ mcp2cli/
 ├── installer/                       # 已有，复用
 │   ├── pipeline.py                  # Step dataclass + runner（共享）
 │   ├── servers_writer.py            # 写入 servers.yaml（共享）
-│   └── skill_sync.py               # skill 软链接（共享）
+│   └── skill_sync.py               # skill 复制到各客户端 + disable MCP（共享）
 ├── config/
 │   └── reader.py                    # 已有，读取所有配置源
 ```
@@ -383,7 +397,7 @@ $ mcp2cli convert mcp-atlassian
    ~/.cursor/skills/mcp-atlassian  ✓
    ~/.codex/skills/mcp-atlassian   ✓
 
-🔒 Disabling MCP server in original configs...
+🔒 MCP server disabled in client configs:
    ~/.claude.json: mcp-atlassian disabled ✓
    ~/.cursor/mcp.json: mcp-atlassian disabled ✓
 
@@ -425,7 +439,7 @@ $ mcp2cli convert mcp-atlassian
 🧩 Generating skill definitions... ✓
 🔗 Syncing skill... ✓
 
-🔒 Disabling MCP server in original configs...
+🔒 MCP server disabled in:
    ~/.claude.json: mcp-atlassian disabled ✓
 
 ✅ Convert complete!
@@ -455,9 +469,9 @@ $ mcp2cli convert mcp-atlassian --dry-run
    1. scan mcp-atlassian
    2. generate cli mcp-atlassian
    3. generate skill mcp-atlassian
-   4. skill sync mcp-atlassian
+   4. skill sync mcp-atlassian (copy + disable MCP)
 
-[DRY RUN] Would disable in:
+[DRY RUN] Would disable in (via skill sync):
    ~/.claude.json: set mcp-atlassian.disabled = true
    ~/.cursor/mcp.json: set mcp-atlassian.disabled = true
 
@@ -496,8 +510,8 @@ mcp2cli convert <server>
     ├── scanner.py                     ← 复用
     ├── generator/cli_gen.py           ← 复用
     ├── generator/skill_gen.py         ← 复用
-    ├── installer/skill_sync.py        ← 复用
+    ├── installer/skill_sync.py        ← 复用（含 disable MCP 逻辑）
     │
     └── converter/config_disabler.py
-          在客户端配置中设置 disabled
+          被 skill_sync.py 调用，在客户端配置中设置 disabled
 ```
