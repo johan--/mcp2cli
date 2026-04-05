@@ -87,7 +87,13 @@ def pull_preset(
     downloaded: list[Path] = []
     for rel_path in manifest.files:
         url = f"{base_url}/{rel_path}"
-        target = _map_target_path(server_name, rel_path)
+        try:
+            target = _map_target_path(server_name, rel_path)
+        except ValueError as e:
+            click.echo(f"  Error: {e}", err=True)
+            for p in downloaded:
+                p.unlink(missing_ok=True)
+            return False
         target.parent.mkdir(parents=True, exist_ok=True)
 
         ok = download_file(url, target)
@@ -139,14 +145,23 @@ def _download_json(url: str) -> dict | None:
 
 
 def _map_target_path(server_name: str, rel_path: str) -> Path:
-    """Map a manifest relative path to the local target path."""
+    """Map a manifest relative path to the local target path.
+
+    Raises ValueError if the resolved path escapes DATA_DIR (path traversal).
+    """
     if rel_path == "tools.json":
-        return TOOLS_DIR / f"{safe_filename(server_name)}.json"
-    if rel_path == "cli.yaml":
-        return CLI_DIR / f"{safe_filename(server_name)}.yaml"
-    if rel_path.startswith("skills/"):
-        return skills_path(server_name) / rel_path[len("skills/"):]
-    return DATA_DIR / server_name / rel_path
+        target = TOOLS_DIR / f"{safe_filename(server_name)}.json"
+    elif rel_path == "cli.yaml":
+        target = CLI_DIR / f"{safe_filename(server_name)}.yaml"
+    elif rel_path.startswith("skills/"):
+        target = skills_path(server_name) / rel_path[len("skills/"):]
+    else:
+        target = DATA_DIR / server_name / rel_path
+
+    resolved = target.resolve()
+    if not resolved.is_relative_to(DATA_DIR.resolve()):
+        raise ValueError(f"Path traversal detected in preset manifest: {rel_path}")
+    return target
 
 
 def _check_existing(server_name: str, files: list[str]) -> list[Path]:
