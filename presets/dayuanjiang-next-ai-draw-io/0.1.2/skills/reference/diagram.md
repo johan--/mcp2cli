@@ -4,58 +4,55 @@
 
 ```bash
 # Create a simple diagram with one shape
-mcp2cli next-ai-draw-io diagram create --xml '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Start" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="100" y="100" width="120" height="60" as="geometry"/></mxCell></root></mxGraphModel>'
+mcp2cli diagram create --xml '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Shape" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="100" y="100" width="120" height="60" as="geometry"/></mxCell></root></mxGraphModel>'
 
-# Create a flowchart with edges
-mcp2cli next-ai-draw-io diagram create --xml '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="A" vertex="1" parent="1"><mxGeometry x="100" y="100" width="120" height="60" as="geometry"/></mxCell><mxCell id="3" value="B" vertex="1" parent="1"><mxGeometry x="300" y="100" width="120" height="60" as="geometry"/></mxCell><mxCell id="4" edge="1" source="2" target="3" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel>'
+# Create a flowchart with two nodes and an edge
+mcp2cli diagram create --xml '<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="2" value="Start" style="ellipse;rounded=1;" vertex="1" parent="1"><mxGeometry x="40" y="40" width="120" height="60" as="geometry"/></mxCell><mxCell id="3" value="End" style="ellipse;rounded=1;" vertex="1" parent="1"><mxGeometry x="300" y="40" width="120" height="60" as="geometry"/></mxCell><mxCell id="4" style="endArrow=classic;" edge="1" source="2" target="3" parent="1"><mxGeometry relative="1" as="geometry"/></mxCell></root></mxGraphModel>'
 ```
 
-Required: `--xml` (complete mxGraphModel XML)
+⚠️ `--xml` is always required. Use for new diagrams or full replacements (not incremental edits).
 
-> Use this for new diagrams or full replacement. For small changes, use `diagram edit`.
-
-## get — Get the current diagram XML
+## get — Get current diagram XML from browser
 
 ```bash
-mcp2cli next-ai-draw-io diagram get
+mcp2cli diagram get
 ```
 
-Fetches latest XML from browser including any manual user edits. ⚠️ Always call BEFORE `diagram edit` to get current cell IDs.
+Returns the current mxGraphModel XML including any manual user edits. Call this **before** `diagram edit` to see current cell IDs and structure.
 
-## edit — Edit diagram by ID-based cell operations
+## edit — Edit diagram using ID-based cell operations
 
 ```bash
 # Add a new cell
-mcp2cli next-ai-draw-io diagram edit --operations '[{"operation":"add","cell_id":"rect-1","new_xml":"<mxCell id=\"rect-1\" value=\"Hello\" style=\"rounded=0;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"100\" y=\"100\" width=\"120\" height=\"60\" as=\"geometry\"/></mxCell>"}]'
+mcp2cli diagram edit --operations '[{"operation":"add","cell_id":"rect-1","new_xml":"<mxCell id=\"rect-1\" value=\"Hello\" style=\"rounded=0;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"100\" y=\"100\" width=\"120\" height=\"60\" as=\"geometry\"/></mxCell>"}]'
 
-# Update a cell label
-mcp2cli next-ai-draw-io diagram edit --operations '[{"operation":"update","cell_id":"2","new_xml":"<mxCell id=\"2\" value=\"New Label\" style=\"rounded=1;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"100\" y=\"100\" width=\"120\" height=\"60\" as=\"geometry\"/></mxCell>"}]'
+# Update an existing cell label and style
+mcp2cli diagram edit --operations '[{"operation":"update","cell_id":"2","new_xml":"<mxCell id=\"2\" value=\"Updated\" style=\"rounded=1;fillColor=#dae8fc;\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"100\" y=\"100\" width=\"120\" height=\"60\" as=\"geometry\"/></mxCell>"}]'
 
 # Delete a cell
-mcp2cli next-ai-draw-io diagram edit --operations '[{"operation":"delete","cell_id":"rect-1"}]'
+mcp2cli diagram edit --operations '[{"operation":"delete","cell_id":"rect-1"}]'
+
+# Multiple operations at once
+mcp2cli diagram edit --operations '[{"operation":"add","cell_id":"n1","new_xml":"..."},{"operation":"delete","cell_id":"old-1"}]'
 ```
 
-Required: `--operations` (JSON array of operations)
+⚠️ Always call `diagram get` first to retrieve current cell IDs.
 
-Each operation requires: `operation` (add/update/delete), `cell_id`. Add/update also require `new_xml` (complete mxCell element).
+Operation types: `add`, `update`, `delete`. Each requires `operation` and `cell_id`; `add`/`update` also require `new_xml`.
 
-⚠️ **Workflow**: call `diagram get` first → use returned IDs in operations.
-
-## download — Export the current diagram to a file
+## export — Export diagram to a file
 
 ```bash
 # Export as PNG
-mcp2cli next-ai-draw-io diagram download --path ./diagram.png
+mcp2cli diagram export --path ./diagram.png
 
 # Export as SVG
-mcp2cli next-ai-draw-io diagram download --path ./diagram.svg --format svg
+mcp2cli diagram export --path ./diagram.svg
 
-# Export as drawio XML
-mcp2cli next-ai-draw-io diagram download --path ./diagram.drawio --format drawio
+# Export as draw.io XML
+mcp2cli diagram export --path ./diagram.drawio
 ```
 
-Required: `--path`
+Also supports: `--format` (drawio|png|svg, auto-detected from file extension if omitted)
 
-Also supports: `--format` (drawio | png | svg; auto-detected from extension if omitted)
-
-Use `mcp2cli next-ai-draw-io diagram <action> --help` for full parameter details.
+Use `mcp2cli diagram <action> --help` for full parameter details.

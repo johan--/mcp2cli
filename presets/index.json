@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updated_at": "2026-04-05T08:04:26.100204+00:00",
+  "updated_at": "2026-04-05T08:13:26.475449+00:00",
   "presets": [
     {
       "server": "dayuanjiang-next-ai-draw-io",
@@ -8,8 +8,8 @@
       "versions": [
         "0.1.2"
       ],
-      "description": "",
-      "updated_at": "2026-04-05T07:56:47.069402+00:00",
+      "description": "Create, edit, and export draw.io diagrams via CLI with real-time browser preview. Use when user needs to create or modify diagrams, generate mxGraphModel XML, or export diagrams as PNG/SVG.",
+      "updated_at": "2026-04-05T08:13:22.769561+00:00",
       "tool_count": 5
     },
     {
@@ -18,7 +18,7 @@
       "versions": [
         "2.14.6"
       ],
-      "description": "",
+      "description": "Manage JIRA issues, sprints, boards, and Confluence pages via CLI. Use when user needs to create/search/update JIRA tickets, manage sprints, or edit Confluence pages.",
       "updated_at": "2026-04-05T06:27:34.288105+00:00",
       "tool_count": 72
     }

@@ -3,16 +3,34 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
+import yaml
 
 from mcp2cli.preset.models import Manifest
 from mcp2cli.preset.pusher import prepare_preset
 from mcp2cli.utils import safe_filename
 from mcp2cli.utils.file_ops import ensure_users_dir
+
+
+def _read_skill_description(version_dir: Path) -> str:
+    """Extract description from skills/SKILL.md YAML frontmatter."""
+    skill_md = version_dir / "skills" / "SKILL.md"
+    if not skill_md.exists():
+        return ""
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+        m = re.match(r"^---\n(.+?)\n---", text, re.DOTALL)
+        if not m:
+            return ""
+        meta = yaml.safe_load(m.group(1))
+        return meta.get("description", "") if isinstance(meta, dict) else ""
+    except Exception:
+        return ""
 
 
 def rebuild_index(output_dir: str) -> None:
@@ -35,12 +53,15 @@ def rebuild_index(output_dir: str) -> None:
         version = manifest_path.parent.name
         server = manifest.server
 
+        # Try to read description from SKILL.md frontmatter
+        description = _read_skill_description(manifest_path.parent)
+
         if server not in entries:
             entries[server] = {
                 "server": server,
                 "latest": version,
                 "versions": [],
-                "description": "",
+                "description": description,
                 "updated_at": manifest.generated_at,
                 "tool_count": manifest.tool_count,
             }
@@ -54,6 +75,8 @@ def rebuild_index(output_dir: str) -> None:
             entry["latest"] = version
             entry["updated_at"] = manifest.generated_at
             entry["tool_count"] = manifest.tool_count
+            if description:
+                entry["description"] = description
 
     index = {
         "version": 2,
