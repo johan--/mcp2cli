@@ -37,7 +37,6 @@ CLIENT_CONFIGS = {
 }
 
 TEMPLATES_DIR = Path(__file__).parent / "generator" / "templates"
-PRESETS_DIR = Path(__file__).parent / "presets"
 
 SESSION_EXPIRY_HOURS = 24
 

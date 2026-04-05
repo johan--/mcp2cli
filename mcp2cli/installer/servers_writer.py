@@ -39,8 +39,6 @@ def write_server(config: ServerConfig, force: bool = False) -> bool:
     servers = data.setdefault("servers", {})
 
     if config.name in servers and not force:
-        click.echo(f"⊘ {config.name} already exists in servers.yaml, skipping write.")
-        click.echo("  Use --force to overwrite config.")
         return True  # Not an error, just skipped
 
     servers[config.name] = config.to_dict()

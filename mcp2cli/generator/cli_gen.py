@@ -85,7 +85,7 @@ def _post_validate(
                 yaml_tools = extract_tools_from_yaml(data)
                 click.echo(f"  Coverage: {len(yaml_tools)} tools mapped")
                 print_command_tree(data, server_name)
-            click.echo(f"Written to {cli_path(server_name)}")
+            click.echo(f"📦 Written to {cli_path(server_name)}")
             backend.clear_session(command_name, server_name)
             return True
 

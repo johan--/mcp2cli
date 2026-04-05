@@ -39,6 +39,7 @@ class LLMBackend(ABC):
         server_name: str = "",
         show_progress: bool = False,
         progress_message: str = "",
+        allowed_tools: list[str] | None = None,
     ) -> LLMResult:
         ...
 
@@ -127,6 +128,7 @@ class ClaudeCLIBackend(LLMBackend):
         server_name: str = "",
         show_progress: bool = False,
         progress_message: str = "",
+        allowed_tools: list[str] | None = None,
     ) -> LLMResult:
         cmd = [
             self.command, "-p", prompt,
@@ -134,6 +136,8 @@ class ClaudeCLIBackend(LLMBackend):
             "--model", self.model,
             "--dangerously-skip-permissions",
         ]
+        if allowed_tools:
+            cmd += ["--allowedTools", ",".join(allowed_tools)]
 
         if show_progress:
             result = self._run_with_progress(cmd, progress_message or "Processing...")

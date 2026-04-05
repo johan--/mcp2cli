@@ -26,11 +26,11 @@ async def _scan_server(config: ServerConfig) -> ToolsJSON:
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init_result = await session.initialize()
 
             server_version = None
-            if hasattr(session, '_server_info') and session._server_info:
-                server_version = getattr(session._server_info, 'version', None)
+            if init_result.serverInfo:
+                server_version = init_result.serverInfo.version or None
 
             result = await session.list_tools()
 
@@ -66,5 +66,5 @@ def scan_server(server_name: str) -> ToolsJSON | None:
         return None
 
     path = save_tools(tools_json)
-    click.echo(f"  Found {len(tools_json.tools)} tools. Written to {path}")
+    click.echo(f"  Found {len(tools_json.tools)} tools. 📦 Written to {path}")
     return tools_json

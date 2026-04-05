@@ -5,7 +5,8 @@ from __future__ import annotations
 import click
 
 from mcp2cli.config.models import ConfigSource, ServerConfig
-from mcp2cli.config.reader import iter_client_servers
+from mcp2cli.config.reader import iter_client_servers, iter_servers_yaml
+from mcp2cli.constants import SERVERS_YAML
 
 
 class ServerNotFoundError(Exception):
@@ -38,6 +39,18 @@ def extract_server_config(
             if config is None:
                 config = cfg
             sources.append(src)
+
+    # Also check servers.yaml when no client filter is applied
+    if config is None and client_filter is None:
+        for name, cfg in iter_servers_yaml():
+            if name == server_name:
+                config = cfg
+                sources.append(ConfigSource(
+                    client="servers.yaml",
+                    config_path=SERVERS_YAML,
+                    config_format="servers_yaml",
+                ))
+                break
 
     if config is None:
         available = set()

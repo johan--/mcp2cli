@@ -13,6 +13,7 @@ from mcp2cli.config.tool_store import load_tools, tools_path
 from mcp2cli.constants import SKILLS_DIR, TEMPLATES_DIR
 from mcp2cli.generator.llm_backend import get_backend
 from mcp2cli.generator.validator import validate_skill
+from mcp2cli.utils.file_ops import parse_frontmatter
 
 MAX_RETRIES = 1
 
@@ -52,7 +53,8 @@ def generate_skill(
 
     # Mode detection
     if skill_md.exists() and not full:
-        existing_hash = _read_existing_hash(skill_md)
+        existing_hash = parse_frontmatter(skill_md.read_text(encoding="utf-8"))
+        existing_hash = existing_hash.get("source_cli_hash") if existing_hash else None
         if existing_hash and existing_hash == source_hash:
             click.echo(f"Skill files are up-to-date (source_cli_hash matches). Nothing to do.")
             return True
@@ -164,7 +166,7 @@ def _print_summary(server_name: str, output_dir: Path) -> None:
     if workflows.exists():
         click.echo(f"  users/workflows.md → generated")
 
-    click.echo(f"Written to {output_dir}")
+    click.echo(f"  📦 Written to {output_dir}")
 
 
 def _build_prompt(
@@ -290,18 +292,3 @@ def _build_resume_prompt(server_name: str, output_dir: Path) -> str:
         f"输出目录: {output_dir}\n"
         f"如果文件已经生成，请检查是否完整。如果未生成，请从上次中断的地方继续。\n"
     )
-
-
-def _read_existing_hash(skill_md: Path) -> str | None:
-    """Read source_cli_hash from SKILL.md frontmatter."""
-    text = skill_md.read_text(encoding="utf-8")
-    if not text.startswith("---"):
-        return None
-    end = text.find("---", 3)
-    if end == -1:
-        return None
-    try:
-        fm = yaml.safe_load(text[3:end])
-        return fm.get("source_cli_hash") if isinstance(fm, dict) else None
-    except yaml.YAMLError:
-        return None

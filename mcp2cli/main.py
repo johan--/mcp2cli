@@ -74,6 +74,28 @@ def _handle_dynamic_command(args: list[str]) -> None:
         raise SystemExit(1)
 
 
+def _preset_status(local_ver: str | None, remote_entry) -> str:
+    """Return a human-readable status string for a preset."""
+    if local_ver and remote_entry:
+        return "synced"
+    if local_ver:
+        return "local"
+    return "remote"
+
+
+def _display_preset_info(entry, version: str | None) -> None:
+    """Print preset availability info to stdout."""
+    display_ver = version or entry.latest
+    click.echo("\nPre-generated skill files available:")
+    click.echo(
+        f"  Version: {display_ver} | "
+        f"Tools: {entry.tool_count} | "
+        f"Updated: {entry.updated_at[:10]}"
+    )
+    if entry.versions and len(entry.versions) > 1:
+        click.echo(f"  Available versions: {', '.join(entry.versions)}")
+
+
 # ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
@@ -346,7 +368,6 @@ def skill_unsync_cmd(server_name: str | None, targets: str | None, skip_re_enabl
 @click.option("--no-preset", is_flag=True, help="Skip preset check")
 @click.option("--preset-version", default=None, help="Use a specific preset version (e.g. 1.2.3)")
 @click.option("--yes", is_flag=True, help="Skip confirmation")
-@click.option("--skip-generate", is_flag=True, help="Only register, skip pipeline")
 def install(
     server_name: str,
     env_pairs: tuple,
@@ -354,14 +375,12 @@ def install(
     no_preset: bool,
     preset_version: str | None,
     yes: bool,
-    skip_generate: bool,
 ):
     """Install a new MCP server and generate skill files."""
     from mcp2cli.config.models import ServerConfig
     from mcp2cli.installer.ai_search import ai_search_server
-    from mcp2cli.installer.install_pipeline import build_install_pipeline
     from mcp2cli.installer.interactive import collect_env_values
-    from mcp2cli.installer.pipeline import run_pipeline
+    from mcp2cli.installer.pipeline import build_pipeline, run_pipeline
     from mcp2cli.installer.servers_writer import write_server
 
     preset_envs: dict[str, str] = {}
@@ -397,26 +416,16 @@ def install(
 
         preset_entry = probe_preset(server_name, version=preset_version, no_preset=no_preset)
         if preset_entry is not None:
-            display_ver = preset_version or preset_entry.latest
-            click.echo(f"\nPre-generated skill files available:")
-            click.echo(
-                f"  Version: {display_ver} | "
-                f"Tools: {preset_entry.tool_count} | "
-                f"Updated: {preset_entry.updated_at[:10]}"
-            )
-            if preset_entry.versions and len(preset_entry.versions) > 1:
-                click.echo(f"  Available versions: {', '.join(preset_entry.versions)}")
+            _display_preset_info(preset_entry, preset_version)
 
             if not click.confirm("\nProceed?", default=True):
                 click.echo("Aborted.")
                 return
 
-    if skip_generate:
-        write_server(config)
-        return
-
-    pipeline = build_install_pipeline(
-        server_name, config, no_preset=no_preset,
+    pipeline = build_pipeline(
+        server_name, config,
+        write_step_name="mcp-add",
+        no_preset=no_preset,
         preset_version=preset_version,
     )
     results = run_pipeline(pipeline)
@@ -453,8 +462,7 @@ def convert(
 ):
     """Convert an already-configured MCP server to skill-based usage."""
     from mcp2cli.converter.config_extractor import ServerNotFoundError, extract_server_config
-    from mcp2cli.converter.pipeline import build_convert_pipeline
-    from mcp2cli.installer.pipeline import run_pipeline
+    from mcp2cli.installer.pipeline import build_pipeline, run_pipeline
 
     click.echo(f"Finding {server_name} in config sources...")
 
@@ -479,27 +487,18 @@ def convert(
     preset_entry = probe_preset(server_name, version=preset_version, no_preset=no_preset)
 
     if preset_entry is not None:
-        display_ver = preset_version or preset_entry.latest
-        click.echo(f"\nPre-generated skill files available:")
-        click.echo(
-            f"  Version: {display_ver} | "
-            f"Tools: {preset_entry.tool_count} | "
-            f"Updated: {preset_entry.updated_at[:10]}"
-        )
-        if preset_entry.versions and len(preset_entry.versions) > 1:
-            click.echo(f"  Available versions: {', '.join(preset_entry.versions)}")
+        _display_preset_info(preset_entry, preset_version)
 
         if not yes:
             if not click.confirm("\nProceed?", default=True):
                 click.echo("Aborted.")
                 return
 
-    pipeline = build_convert_pipeline(
+    pipeline = build_pipeline(
         server_name=server_name,
         config=config,
-        found_sources=sources,
+        force_write=force,
         skip_disable=skip_disable,
-        force=force,
         no_preset=no_preset,
         preset_version=preset_version,
     )
@@ -749,46 +748,64 @@ def preset_group():
 
 @preset_group.command("list")
 @click.argument("server_name", required=False)
-@click.option("--refresh", is_flag=True, help="Force refresh remote index")
-def preset_list_cmd(server_name: str | None, refresh: bool):
-    """List available presets, or show versions for a specific preset."""
+@click.option("--local", "local_only", is_flag=True, help="Show only local presets")
+def preset_list_cmd(server_name: str | None, local_only: bool):
+    """List presets with local and remote status."""
+    from mcp2cli.preset.local import scan_local_presets
     from mcp2cli.preset.registry import fetch_index
 
-    index = fetch_index(force_refresh=refresh)
-    if index is None:
-        click.echo("Could not fetch preset index. Check your network connection.")
-        raise SystemExit(1)
+    local_map = scan_local_presets()
+    index = None if local_only else fetch_index()
 
-    if not index.presets:
-        click.echo("No presets available.")
-        return
-
+    # Detail view for a single server
     if server_name:
-        entry = index.find(server_name)
-        if entry is None:
+        local_ver = local_map.get(server_name)
+        remote_entry = index.find(server_name) if index else None
+
+        if not local_ver and not remote_entry:
             click.echo(f"No preset found for '{server_name}'.")
             raise SystemExit(1)
-        click.echo(f"Preset: {entry.server}")
-        click.echo(f"  Latest:      {entry.latest}")
-        click.echo(f"  Versions:    {', '.join(entry.versions)}")
-        click.echo(f"  Updated:     {entry.updated_at[:10] if entry.updated_at else '-'}")
-        if entry.description:
-            click.echo(f"  Description: {entry.description}")
-        click.echo(f"\nUse 'mcp2cli preset pull {server_name}@<version>' to download a specific version.")
+
+        click.echo(f"Preset: {server_name}")
+        click.echo(f"  Local:       {local_ver or '-'}")
+        if remote_entry:
+            click.echo(f"  Remote:      {remote_entry.latest}")
+            click.echo(f"  Versions:    {', '.join(remote_entry.versions)}")
+            click.echo(f"  Updated:     {remote_entry.updated_at[:10] if remote_entry.updated_at else '-'}")
+            if remote_entry.description:
+                click.echo(f"  Description: {remote_entry.description}")
+        else:
+            click.echo(f"  Remote:      -")
+
+        status = _preset_status(local_ver, remote_entry)
+        click.echo(f"  Status:      {status}")
         return
 
-    click.echo("Available presets:")
-    click.echo(f"  {'NAME':<25} {'LATEST':<10} {'VERSIONS':<25} {'UPDATED'}")
-    click.echo("  " + "-" * 80)
-    for p in index.presets:
-        versions_str = ", ".join(p.versions[:3])
-        if len(p.versions) > 3:
-            versions_str += f" (+{len(p.versions) - 3})"
+    # Unified list view
+    all_names: set[str] = set(local_map.keys())
+    if index:
+        for p in index.presets:
+            all_names.add(p.server)
+
+    if not all_names:
+        click.echo("No presets found (local or remote).")
+        return
+
+    click.echo(f"  {'NAME':<25} {'LOCAL':<12} {'REMOTE':<12} {'STATUS'}")
+    click.echo("  " + "-" * 65)
+    for name in sorted(all_names):
+        local_ver = local_map.get(name)
+        remote_entry = index.find(name) if index else None
+        remote_ver = remote_entry.latest if remote_entry else None
+        status = _preset_status(local_ver, remote_entry)
         click.echo(
-            f"  {p.server:<25} {p.latest or '-':<10} "
-            f"{versions_str:<25} {p.updated_at[:10] if p.updated_at else '-'}"
+            f"  {name:<25} {local_ver or '-':<12} {remote_ver or '-':<12} {status}"
         )
-    click.echo(f"\n{len(index.presets)} presets available. Use 'mcp2cli preset pull <name>' to download.")
+
+    total = len(all_names)
+    local_count = len(local_map)
+    remote_count = len(index.presets) if index else 0
+    click.echo(f"\n{total} presets ({local_count} local, {remote_count} remote).")
 
 
 @preset_group.command("pull")
@@ -808,29 +825,16 @@ def preset_pull_cmd(preset_spec: str, do_sync: bool, force: bool, dry_run: bool)
     Without a version, pulls the latest.
     """
     from mcp2cli.preset.downloader import pull_preset
-    from mcp2cli.preset.registry import fetch_index
     from mcp2cli.preset.version import parse_preset_spec
 
     server_name, version = parse_preset_spec(preset_spec)
 
-    if dry_run:
-        index = fetch_index()
-        if index is None:
-            click.echo("Could not fetch preset index.", err=True)
-            raise SystemExit(1)
-        entry = index.find(server_name)
-        if entry is None:
-            click.echo(f"No preset found for '{server_name}'.")
-            raise SystemExit(1)
-        display_ver = version or entry.latest
-        click.echo(f"[DRY RUN] Would download preset for {server_name}:")
-        click.echo(f"  Version: {display_ver}")
-        click.echo(f"  Available versions: {', '.join(entry.versions)}")
-        return
-
-    ok = pull_preset(server_name, version=version, force=force)
+    ok = pull_preset(server_name, version=version, force=force, dry_run=dry_run)
     if not ok:
         raise SystemExit(1)
+
+    if dry_run:
+        return
 
     if do_sync:
         from mcp2cli.installer.skill_sync import skill_sync
@@ -838,6 +842,25 @@ def preset_pull_cmd(preset_spec: str, do_sync: bool, force: bool, dry_run: bool)
         skill_sync(server_name)
     else:
         click.echo(f"\nNext: run 'mcp2cli skill sync {server_name}' to copy to AI clients.")
+
+
+@preset_group.command("push")
+@click.argument("server_name")
+@click.option("--version", "preset_version", default=None, help="Override version (default: from tools.json)")
+@click.option("--yes", is_flag=True, help="Skip confirmation")
+def preset_push_cmd(server_name: str, preset_version: str | None, yes: bool):
+    """Push local preset files to the remote repository via git SSH.
+
+    Validates local files, assembles the preset bundle, pushes to a new
+    branch, then prints a URL to open in your browser to create the PR.
+
+    Requires git and an SSH key configured for the target repository.
+    """
+    from mcp2cli.preset.pusher import push_preset
+
+    ok = push_preset(server_name, version=preset_version, yes=yes)
+    if not ok:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

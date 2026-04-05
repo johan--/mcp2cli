@@ -38,11 +38,6 @@ class ToolsDiff:
         if self.version_changed:
             lines.append(f"version: {self.old_version} -> {self.new_version}")
 
-        old_count = (
-            len(set(self.removed_tools))
-            + len(set(self.schema_changed_tools))
-            + (len(set()) if not self.added_tools else 0)
-        )
         if self.added_tools or self.removed_tools:
             lines.append(f"tools: +{len(self.added_tools)} -{len(self.removed_tools)}")
             for t in self.added_tools:

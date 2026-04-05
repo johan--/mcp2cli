@@ -12,7 +12,8 @@ import click
 
 from mcp2cli.constants import CLI_DIR, DATA_DIR, SKILLS_DIR, TOOLS_DIR
 from mcp2cli.preset.models import Manifest
-from mcp2cli.preset.registry import _repo_url, find_preset
+from mcp2cli.preset.registry import _raw_base, find_preset
+from mcp2cli.utils.file_ops import ensure_users_dir
 
 FILE_TIMEOUT = 10
 
@@ -21,6 +22,7 @@ def pull_preset(
     server_name: str,
     version: str | None = None,
     force: bool = False,
+    dry_run: bool = False,
 ) -> bool:
     """Download all preset files for a server.
 
@@ -28,44 +30,43 @@ def pull_preset(
         server_name: MCP server name.
         version: Specific version to pull, or None for latest.
         force: Overwrite existing files without prompting.
+        dry_run: Preview what would be downloaded without writing files.
 
     Returns True on success.
     """
-    repo_url = _repo_url()
+    raw_base = _raw_base()
 
-    # Resolve version from index if not specified
+    # Resolve version from index
     entry = find_preset(server_name)
-    if version is None and entry is not None:
-        version = entry.resolve_version(None)
-    elif version is not None and entry is not None:
-        # Validate that the requested version exists
-        version = entry.resolve_version(version)
+    if entry is None:
+        click.echo(f"Error: no preset found for '{server_name}'.", err=True)
+        return False
 
-    # Try versioned URL first, fall back to flat (old repo structure)
-    manifest_data = None
-    if version:
-        versioned_url = f"{repo_url}/presets/{server_name}/{version}/manifest.json"
-        manifest_data = _download_json(versioned_url)
+    try:
+        resolved_version = entry.resolve_version(version)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        return False
 
+    if dry_run:
+        click.echo(f"[DRY RUN] Would download preset for {server_name}:")
+        click.echo(f"  Version: {resolved_version}")
+        click.echo(f"  Available versions: {', '.join(entry.versions)}")
+        return True
+
+    # Fetch manifest
+    manifest_url = f"{raw_base}/{server_name}/{resolved_version}/manifest.json"
+    manifest_data = _download_json(manifest_url)
     if manifest_data is None:
-        # Fallback to flat structure (backward compat with old repos)
-        flat_url = f"{repo_url}/presets/{server_name}/manifest.json"
-        manifest_data = _download_json(flat_url)
-        if manifest_data is None:
-            click.echo(f"Error: could not download manifest for {server_name}.", err=True)
-            return False
-        # Using flat URL — set base_url accordingly
-        base_url = f"{repo_url}/presets/{server_name}"
-    else:
-        base_url = f"{repo_url}/presets/{server_name}/{version}"
+        click.echo(f"Error: could not download manifest for {server_name}@{resolved_version}.", err=True)
+        return False
 
     manifest = Manifest.from_dict(manifest_data)
-    ver_display = manifest.server_version or version or "unknown"
+    base_url = f"{raw_base}/{server_name}/{resolved_version}"
+
+    click.echo(f"Downloading preset for {server_name}...")
     click.echo(
-        f"Downloading preset for {server_name}..."
-    )
-    click.echo(
-        f"  Preset: v{ver_display}, "
+        f"  Preset: v{resolved_version}, "
         f"{manifest.tool_count} tools, "
         f"generated {manifest.generated_at[:10]}"
     )
@@ -82,7 +83,6 @@ def pull_preset(
 
     # Download each file
     downloaded: list[Path] = []
-
     for rel_path in manifest.files:
         url = f"{base_url}/{rel_path}"
         target = _map_target_path(server_name, rel_path)
@@ -91,7 +91,6 @@ def pull_preset(
         ok = download_file(url, target)
         if not ok:
             click.echo(f"  Error: failed to download {rel_path}", err=True)
-            # Clean up partial download
             for p in downloaded:
                 p.unlink(missing_ok=True)
             return False
@@ -99,18 +98,7 @@ def pull_preset(
         downloaded.append(target)
         click.echo(f"  ✓ {rel_path}")
 
-    # Create users/ directory
-    users_dir = SKILLS_DIR / server_name / "users"
-    if not users_dir.exists():
-        users_dir.mkdir(parents=True, exist_ok=True)
-        (users_dir / ".gitkeep").touch()
-        users_skill = users_dir / "SKILL.md"
-        if not users_skill.exists():
-            users_skill.write_text(
-                "# User Notes\n\nAdd your custom workflows and tips here.\n"
-                "This file is never overwritten by mcp2cli generate/update.\n",
-                encoding="utf-8",
-            )
+    ensure_users_dir(SKILLS_DIR / server_name)
 
     click.echo(f"Done! Files written to {DATA_DIR}/")
     return True
@@ -126,7 +114,6 @@ def download_file(url: str, target_path: Path) -> bool:
     except (URLError, OSError):
         return False
 
-    # Atomic write
     target_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=target_path.parent, suffix=".tmp")
     try:

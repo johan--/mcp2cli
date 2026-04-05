@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import click
 
 from mcp2cli.config.models import ConfigSource
+from mcp2cli.utils.file_ops import atomic_write_json, atomic_write_text
 
 
 def disable_server(
@@ -48,7 +48,7 @@ def _disable_json(server_name: str, config_path: Path) -> bool:
 
     servers[server_name]["disabled"] = True
 
-    _atomic_write_json(config_path, data)
+    atomic_write_json(config_path, data)
     return True
 
 
@@ -72,7 +72,7 @@ def _disable_toml(server_name: str, config_path: Path) -> bool:
 
     servers[server_name]["disabled"] = True
 
-    _atomic_write_text(config_path, tomlkit.dumps(data))
+    atomic_write_text(config_path, tomlkit.dumps(data))
     return True
 
 
@@ -89,19 +89,3 @@ def disable_in_all_sources(
         else:
             all_ok = False
     return all_ok
-
-
-def _atomic_write_json(path: Path, data: dict) -> None:
-    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-    _atomic_write_text(path, content)
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-    try:
-        with open(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        Path(tmp).replace(path)
-    except Exception:
-        Path(tmp).unlink(missing_ok=True)
-        raise

@@ -6,7 +6,8 @@ import shutil
 from pathlib import Path
 
 import click
-import yaml
+
+from mcp2cli.utils.file_ops import parse_frontmatter
 
 
 def delete_file(file_path: Path) -> bool:
@@ -104,13 +105,5 @@ def _parse_frontmatter_name(skill_md: Path) -> str | None:
         text = skill_md.read_text(encoding="utf-8")
     except OSError:
         return None
-    if not text.startswith("---"):
-        return None
-    end = text.find("---", 3)
-    if end == -1:
-        return None
-    try:
-        fm = yaml.safe_load(text[3:end])
-        return fm.get("name") if isinstance(fm, dict) else None
-    except yaml.YAMLError:
-        return None
+    fm = parse_frontmatter(text)
+    return fm.get("name") if fm else None

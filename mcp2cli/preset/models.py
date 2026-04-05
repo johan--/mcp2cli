@@ -102,6 +102,17 @@ class Manifest:
     generated_by: str
     files: list[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict:
+        return {
+            "server": self.server,
+            "server_version": self.server_version,
+            "tool_count": self.tool_count,
+            "cli_hash": self.cli_hash,
+            "generated_at": self.generated_at,
+            "generated_by": self.generated_by,
+            "files": self.files,
+        }
+
     @classmethod
     def from_dict(cls, data: dict) -> Manifest:
         return cls(

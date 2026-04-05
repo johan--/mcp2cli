@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from pathlib import Path
 
@@ -11,6 +10,7 @@ import yaml
 from mcp2cli.cli.mapping import cli_path, cli_yaml_hash, extract_tools_from_yaml
 from mcp2cli.config.tool_store import load_tools
 from mcp2cli.constants import RESERVED_COMMANDS, SKILLS_DIR
+from mcp2cli.utils.file_ops import ensure_users_dir, parse_frontmatter, strip_frontmatter
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ def validate_skill(server_name: str, output_dir: Path | None = None) -> list[str
     text = skill_md.read_text(encoding="utf-8")
 
     # Frontmatter check
-    fm = _parse_frontmatter(text)
+    fm = parse_frontmatter(text)
     if fm is None:
         errors.append("SKILL.md missing YAML frontmatter")
     else:
@@ -181,7 +181,7 @@ def validate_skill(server_name: str, output_dir: Path | None = None) -> list[str
             )
 
     # Token estimate (rough: ~4 chars per token)
-    body = _strip_frontmatter(text)
+    body = strip_frontmatter(text)
     estimated_tokens = len(body) // 4
     if estimated_tokens > 1200:
         errors.append(f"SKILL.md estimated at {estimated_tokens} tokens (hard limit: 1200)")
@@ -194,19 +194,10 @@ def validate_skill(server_name: str, output_dir: Path | None = None) -> list[str
         errors.append("reference/ directory missing or empty")
 
     # Users directory (create if missing, not an error)
-    users_dir = skill_dir / "users"
-    if not users_dir.exists():
-        users_dir.mkdir(parents=True, exist_ok=True)
-        (users_dir / ".gitkeep").touch()
-        users_skill = users_dir / "SKILL.md"
-        if not users_skill.exists():
-            users_skill.write_text(
-                "# User Notes\n\nAdd your custom workflows and tips here.\n"
-                "This file is never overwritten by mcp2cli generate/update.\n",
-                encoding="utf-8",
-            )
+    ensure_users_dir(skill_dir)
+
     # Workflows placeholder (create if missing, not an error — LLM fills on first gen)
-    workflows_md = users_dir / "workflows.md"
+    workflows_md = skill_dir / "users" / "workflows.md"
     if not workflows_md.exists():
         workflows_md.write_text(
             "# Common Workflow Examples\n\n"
@@ -216,25 +207,3 @@ def validate_skill(server_name: str, output_dir: Path | None = None) -> list[str
         )
 
     return errors
-
-
-def _parse_frontmatter(text: str) -> dict | None:
-    """Parse YAML frontmatter from markdown text."""
-    if not text.startswith("---"):
-        return None
-    end = text.find("---", 3)
-    if end == -1:
-        return None
-    try:
-        return yaml.safe_load(text[3:end])
-    except yaml.YAMLError:
-        return None
-
-
-def _strip_frontmatter(text: str) -> str:
-    if not text.startswith("---"):
-        return text
-    end = text.find("---", 3)
-    if end == -1:
-        return text
-    return text[end + 3:].strip()

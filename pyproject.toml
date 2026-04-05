@@ -49,6 +49,3 @@ mcp2cli = "mcp2cli.main:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["mcp2cli"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"mcp2cli/presets" = "mcp2cli/presets"

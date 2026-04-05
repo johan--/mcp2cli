@@ -86,6 +86,37 @@ class ToolsJSON:
 
 
 @dataclass
+class AISearchCandidate:
+    """A single candidate from AI-based MCP server search."""
+
+    server_name: str
+    package_name: str
+    package_registry: str
+    command: str
+    args: list[str]
+    env: dict[str, dict]
+    source_url: str
+    github_stars: str = ""
+    is_official: bool = False
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> AISearchCandidate:
+        return cls(
+            server_name=data.get("server_name", ""),
+            package_name=data.get("package_name", ""),
+            package_registry=data.get("package_registry", ""),
+            command=data.get("command", ""),
+            args=data.get("args", []),
+            env=data.get("env", {}),
+            source_url=data.get("source_url", ""),
+            github_stars=data.get("github_stars", ""),
+            is_official=data.get("is_official", False),
+            description=data.get("description", ""),
+        )
+
+
+@dataclass
 class AISearchResult:
     """Result from AI-based MCP server search."""
 
@@ -99,9 +130,14 @@ class AISearchResult:
     source_url: str = ""
     error: str = ""
     suggestions: list[str] = field(default_factory=list)
+    candidates: list[AISearchCandidate] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict) -> AISearchResult:
+        candidates = [
+            AISearchCandidate.from_dict(c)
+            for c in data.get("candidates", [])
+        ]
         return cls(
             found=data.get("found", False),
             server_name=data.get("server_name", ""),
@@ -113,4 +149,5 @@ class AISearchResult:
             source_url=data.get("source_url", ""),
             error=data.get("error", ""),
             suggestions=data.get("suggestions", []),
+            candidates=candidates,
         )
