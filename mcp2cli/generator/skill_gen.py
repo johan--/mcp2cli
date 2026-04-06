@@ -22,7 +22,6 @@ MAX_RETRIES = 1
 def generate_skill(
     server_name: str,
     output_dir: Path | None = None,
-    full: bool = False,
 ) -> bool:
     """Generate Skill files (SKILL.md + reference/ + users/workflows.md) via LLM.
 
@@ -52,18 +51,15 @@ def generate_skill(
     # Compute source_cli_hash
     source_hash = cli_yaml_hash(server_name)
 
-    # Mode detection
-    if skill_md.exists() and not full:
+    # Up-to-date check
+    if skill_md.exists():
         existing_hash = parse_frontmatter(skill_md.read_text(encoding="utf-8"))
         existing_hash = existing_hash.get("source_cli_hash") if existing_hash else None
         if existing_hash and existing_hash == source_hash:
             click.echo(f"Skill files are up-to-date (source_cli_hash matches). Nothing to do.")
             return True
-        incremental = True
-        click.echo(f"Updating skill files (incremental)...")
-    else:
-        incremental = False
-        click.echo(f"Generating skill files for {server_name}...")
+
+    click.echo(f"Generating skill files for {server_name}...")
 
     # Read CLI YAML for version
     cli_data = yaml.safe_load(cli_yaml.read_text(encoding="utf-8"))
@@ -93,7 +89,6 @@ def generate_skill(
         source_cli_hash=source_hash or "",
         generated_at=generated_at,
         output_dir=out_dir,
-        incremental=incremental,
     )
 
     result = backend.invoke(
@@ -176,7 +171,6 @@ def _build_prompt(
     source_cli_hash: str,
     generated_at: str,
     output_dir: Path,
-    incremental: bool,
 ) -> str:
     skill_rule_path = TEMPLATES_DIR / "skill_gen_skill.md"
     skill_example_path = TEMPLATES_DIR / "skill_gen_example.md"
@@ -184,43 +178,6 @@ def _build_prompt(
     tools_file = tools_path(server_name)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    if incremental:
-        return (
-            f"You are the Skill file generator for mcp2cli. Your task is to update existing Skill files to keep them in sync with the latest CLI command tree.\n\n"
-            f"Follow these steps:\n\n"
-            f"Step 1: Read the generation rules\n"
-            f"Read file {skill_rule_path} to understand the Skill file structure requirements and conciseness principles.\n\n"
-            f"Step 2: Get the current command tree\n"
-            f"Read file {cli_yaml_path}, the latest hierarchical command mapping file for MCP server \"{server_name}\".\n\n"
-            f"Step 3: Get tool schemas\n"
-            f"Read file {tools_file} to get the inputSchema (parameter definitions) for all tools.\n\n"
-            f"Step 4: Read existing Skill files\n"
-            f"Read the following existing files:\n"
-            f"- {output_dir}/SKILL.md\n"
-            f"- All .md files under {output_dir}/reference/\n\n"
-            f"Step 5: Diff analysis\n"
-            f"Compare the current CLI YAML command tree against the command list in the existing Skill files:\n"
-            f"- Find new commands (present in CLI but missing from the Commands table in SKILL.md)\n"
-            f"- Find deleted commands (present in SKILL.md but no longer in CLI)\n"
-            f"- Find commands whose descriptions have changed\n"
-            f"- Check reference/ files for sections referencing deleted commands\n\n"
-            f"Step 6: Incremental update\n"
-            f"Only modify parts affected by the diff; leave everything else unchanged:\n"
-            f"- SKILL.md: add/remove command rows in the Commands table; keep Examples and formatting of existing commands intact\n"
-            f"- reference/: add sections (with examples and parameters) for new commands; remove sections for deleted commands\n"
-            f"- frontmatter: update source_cli_hash to \"{source_cli_hash}\", source_version to \"{source_version}\", generated_at to \"{generated_at}\"\n\n"
-            f"Step 7: Write files\n"
-            f"Write the modified files to {output_dir}. Unchanged files do not need to be rewritten.\n\n"
-            f"Important constraints:\n"
-            f"- Do not arbitrarily modify existing command descriptions, examples, or formatting — only change the diff\n"
-            f"- Extract examples and parameters for new commands from the inputSchema in the tools JSON\n"
-            f"- SKILL.md total token count must still be ≤ 800\n"
-            f"- The source_cli_hash in the frontmatter must use the value given above: \"{source_cli_hash}\"\n"
-            f"- Do not output explanations; execute the steps directly\n"
-            f"- Do not touch any files under the users/ directory\n"
-            f"- After completion, output a summary: \"Updated: X new commands added, Y removed, Z preserved\"\n"
-        )
 
     return (
         f"You are the Skill file generator for mcp2cli. Your task is to generate a set of agent-usable Skill files (SKILL.md + reference + examples) for an MCP server.\n\n"

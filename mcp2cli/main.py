@@ -202,13 +202,12 @@ def generate_cli_cmd(server_name: str, merge: bool):
 @generate.command("skill")
 @click.argument("server_name")
 @click.option("-o", "--output", type=click.Path(), help="Output directory")
-@click.option("--full", is_flag=True, help="Force full regeneration")
-def generate_skill_cmd(server_name: str, output: str | None, full: bool):
+def generate_skill_cmd(server_name: str, output: str | None):
     """Generate Skill files (SKILL.md + reference + examples) via AI."""
     from mcp2cli.generator.skill_gen import generate_skill
 
     output_dir = Path(output) if output else None
-    ok = generate_skill(server_name, output_dir=output_dir, full=full)
+    ok = generate_skill(server_name, output_dir=output_dir)
     if not ok:
         raise SystemExit(1)
 
