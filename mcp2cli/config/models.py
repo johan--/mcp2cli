@@ -21,6 +21,13 @@ class ServerConfig:
             d["env"] = dict(self.env)
         return d
 
+    def to_server_meta(self) -> dict:
+        """Build a server_meta dict for embedding in tools.json."""
+        meta: dict = {"command": self.command, "args": self.args}
+        if self.env:
+            meta["env"] = {k: {"required": True, "sensitive": False} for k in self.env}
+        return meta
+
 
 @dataclass
 class ConfigSource:
@@ -48,12 +55,13 @@ class ToolsJSON:
     version: str | None
     scanned_at: str
     tools: list[ToolInfo] = field(default_factory=list)
+    server_meta: dict | None = None
 
     def tool_names(self) -> set[str]:
         return {t.name for t in self.tools}
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "server": self.server,
             "version": self.version,
             "scanned_at": self.scanned_at,
@@ -66,6 +74,9 @@ class ToolsJSON:
                 for t in self.tools
             ],
         }
+        if self.server_meta:
+            d["server_meta"] = self.server_meta
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> ToolsJSON:
@@ -82,6 +93,7 @@ class ToolsJSON:
             version=data.get("version"),
             scanned_at=data.get("scanned_at", ""),
             tools=tools,
+            server_meta=data.get("server_meta"),
         )
 
 

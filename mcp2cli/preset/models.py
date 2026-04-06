@@ -76,10 +76,26 @@ class PresetIndex:
     version: int
     updated_at: str
     presets: list[PresetEntry] = field(default_factory=list)
+    aliases: dict[str, str] = field(default_factory=dict)
 
     def find(self, server_name: str) -> PresetEntry | None:
         normalized = server_name.replace("/", "-")
-        return next((p for p in self.presets if p.server == normalized), None)
+        # Direct match first
+        result = next((p for p in self.presets if p.server == normalized), None)
+        if result is not None:
+            return result
+        # Alias resolution
+        resolved = self.aliases.get(normalized)
+        if resolved:
+            return next((p for p in self.presets if p.server == resolved), None)
+        return None
+
+    def resolve_name(self, server_name: str) -> str:
+        """Resolve a server name through aliases. Returns canonical name."""
+        normalized = server_name.replace("/", "-")
+        if any(p.server == normalized for p in self.presets):
+            return normalized
+        return self.aliases.get(normalized, normalized)
 
     @classmethod
     def from_dict(cls, data: dict) -> PresetIndex:
@@ -88,6 +104,7 @@ class PresetIndex:
             version=data.get("version", 1),
             updated_at=data.get("updated_at", ""),
             presets=presets,
+            aliases=data.get("aliases", {}),
         )
 
 

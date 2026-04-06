@@ -99,22 +99,28 @@ commands:
 
 ## server_aliases Auto-Generation Rules
 
-Generate short aliases for server names:
+Generate short aliases for server names. These aliases are used for **install-time resolution** (e.g., `mcp2cli install gitlab` → finds `zereight-gitlab-mcp`). Keep them minimal and meaningful.
 
-1. Remove `mcp-` prefix: `mcp-atlassian` → `atlassian`
-2. Remove `@scope/` prefix: `@modelcontextprotocol/github` → `github`
-3. Remove `-mcp` suffix: `atlassian-mcp` → `atlassian`
-4. If the result conflicts with management commands (list, scan, generate, daemon, tools, call) → do not generate
-5. If the server name is already short (no prefix/suffix to remove) → do not generate aliases
+1. Extract the **core product name** from the server name:
+   - Remove `mcp-` prefix: `mcp-atlassian` → `atlassian`
+   - Remove `-mcp` suffix: `atlassian-mcp` → `atlassian`
+   - Remove `@scope/` prefix: `@modelcontextprotocol/github` → `github`
+   - Remove author/org prefix: `zereight/gitlab-mcp` → `gitlab`, `dayuanjiang-next-ai-draw-io` → `drawio`
+2. If the result conflicts with management commands (list, scan, generate, daemon, tools, call, install, convert, remove, update, preset, batch, mcp, skill) → do not generate
+3. If the server name is already short (no prefix/suffix to remove) → do not generate aliases
+4. Generate at most **1-2 aliases** — only the most recognizable product names
 
 ## command_shortcuts Auto-Generation Rules
 
-Register top-level keys under commands as shortcuts:
+Register top-level keys under commands as shortcuts **only for multi-product servers** where domain separation is essential. Shortcuts let users skip the server name: `mcp2cli jira ...` instead of `mcp2cli mcp-atlassian jira ...`.
 
-1. Top-level command name is a **domain-specific word** (jira, confluence, github, slack, etc.) → include
-2. Top-level command name is a **generic verb** (search, list, get, create, run, etc.) → exclude
-3. Conflicts with management commands → exclude
-4. Only one top-level command → do not generate (no need for shortcuts)
+1. **Multi-product servers** (e.g., atlassian has both jira and confluence): top-level command names that are **distinct product/sub-product names** → include (e.g., `jira`, `confluence`)
+2. **Single-product servers** (e.g., gitlab-mcp, github-mcp, next-ai-draw-io): all tools belong to one product → `command_shortcuts: []` (empty), even if tools are internally grouped into sub-groups like `diagram` and `session`. Internal groupings are not shortcuts — there is no domain ambiguity to resolve
+3. **Must always exclude** — two categories:
+   - **Generic resource/domain names**: `issue`, `repo`, `mr`, `pipeline`, `branch`, `commit`, `user`, `group`, `project`, `label`, `wiki`, `namespace`, `event`, `deployment`, `release`, `search`, `list`, `get`, `create`, `run`, etc.
+   - **Infrastructure/lifecycle names** (appear in almost any server): `session`, `auth`, `token`, `connection`, `config`, `setting`, `credential`, `workspace`, `context`, `state`, `cache`, etc.
+4. **Simple test**: Ask — "Would a gitlab server, a jira server, and a slack server all plausibly have a top-level command with this exact name?" If yes → exclude it. For example, `session` fails this test (any server can have session management) → exclude
+5. Conflicts with management commands → exclude
 
 ## Description Writing Guidelines
 

@@ -18,10 +18,13 @@ def disable_server(
 ) -> bool:
     """Set disabled=true for a server in a client config file.
 
+    Missing client config files are treated as a no-op success so sync flows
+    can safely skip clients that are not configured locally.
+
     Returns True if successful, False on failure.
     """
     if not config_path.exists():
-        return False
+        return True
 
     try:
         if config_format in ("claude_json", "cursor_json"):

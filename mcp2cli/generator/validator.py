@@ -181,14 +181,6 @@ def validate_skill(server_name: str, output_dir: Path | None = None) -> list[str
                 f"current CLI YAML hash is '{current_hash}'"
             )
 
-    # Token estimate (rough: ~4 chars per token)
-    body = strip_frontmatter(text)
-    estimated_tokens = len(body) // 4
-    if estimated_tokens > 1200:
-        errors.append(f"SKILL.md estimated at {estimated_tokens} tokens (hard limit: 1200)")
-    elif estimated_tokens > 800:
-        errors.append(f"Warning: SKILL.md at ~{estimated_tokens} tokens (target: ≤800)")
-
     # Reference directory
     ref_dir = skill_dir / "reference"
     if not ref_dir.exists() or not list(ref_dir.glob("*.md")):

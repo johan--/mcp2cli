@@ -146,6 +146,23 @@ def ai_search_server(server_name: str) -> AISearchResult | None:
     return search_result
 
 
+def build_server_meta(result: AISearchResult) -> dict | None:
+    """Build a server_meta dict from AI search result for embedding in tools.json."""
+    if not result.found or not result.command:
+        return None
+    meta: dict = {
+        "command": result.command,
+        "args": result.args,
+    }
+    if result.package_name:
+        meta["package_name"] = result.package_name
+    if result.package_registry:
+        meta["package_registry"] = result.package_registry
+    if result.env:
+        meta["env"] = result.env
+    return meta
+
+
 def _select_candidate(
     server_name: str,
     candidates: list[AISearchCandidate],

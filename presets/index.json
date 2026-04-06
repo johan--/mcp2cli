@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "updated_at": "2026-04-05T10:57:50.052395+00:00",
+  "version": 3,
+  "updated_at": "2026-04-06T05:54:35.140099+00:00",
   "presets": [
     {
       "server": "dayuanjiang-next-ai-draw-io",
@@ -9,7 +9,7 @@
         "0.1.2"
       ],
       "description": "Create, edit, and export draw.io diagrams via CLI with real-time browser preview. Use when user needs to create or modify diagrams, generate mxGraphModel XML, or export diagrams as PNG/SVG.",
-      "updated_at": "2026-04-05T08:13:22.769561+00:00",
+      "updated_at": "2026-04-06T05:54:35.103945+00:00",
       "tool_count": 5
     },
     {
@@ -23,14 +23,20 @@
       "tool_count": 72
     },
     {
-      "server": "zereight/gitlab-mcp",
-      "latest": "2.0.35",
+      "server": "zereight-gitlab-mcp",
+      "latest": "2.0.36",
       "versions": [
-        "2.0.35"
+        "2.0.35",
+        "2.0.36"
       ],
-      "description": "",
-      "updated_at": "2026-04-05T10:57:50.052395+00:00",
+      "description": "Manage GitLab repos, MRs, issues, pipelines, deployments, and releases via CLI. Use when user needs to create/search repos, review/merge MRs, manage issues, or run pipelines.",
+      "updated_at": "2026-04-06T05:36:03.301032+00:00",
       "tool_count": 122
     }
-  ]
+  ],
+  "aliases": {
+    "atlassian": "mcp-atlassian",
+    "gitlab": "zereight-gitlab-mcp",
+    "next-ai-draw-io": "dayuanjiang-next-ai-draw-io"
+  }
 }

@@ -33,14 +33,39 @@ def _read_skill_description(version_dir: Path) -> str:
         return ""
 
 
+def _read_cli_yaml_aliases(version_dir: Path) -> list[str]:
+    """Extract server_aliases from cli.yaml for install alias resolution.
+
+    command_shortcuts are CLI command shortcuts, NOT server name aliases,
+    so they are excluded from the index.
+    """
+    cli_yaml = version_dir / "cli.yaml"
+    if not cli_yaml.exists():
+        return []
+    try:
+        data = yaml.safe_load(cli_yaml.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return []
+        aliases: list[str] = []
+        server = data.get("server", "")
+        for a in data.get("server_aliases", []):
+            if isinstance(a, str) and a != server:
+                aliases.append(a)
+        return aliases
+    except Exception:
+        return []
+
+
 def rebuild_index(output_dir: str) -> None:
     """Scan all preset subdirectories and write index.json.
 
     Looks for ``<server>/<version>/manifest.json`` under *output_dir*,
     aggregates them into a single ``index.json`` at the root.
+    Also extracts aliases from cli.yaml files.
     """
     root = Path(output_dir)
     entries: dict[str, dict] = {}  # server -> entry dict
+    all_aliases: dict[str, str] = {}  # alias -> server
 
     for manifest_path in sorted(root.glob("*/*/manifest.json")):
         try:
@@ -51,10 +76,17 @@ def rebuild_index(output_dir: str) -> None:
             continue
 
         version = manifest_path.parent.name
-        server = manifest.server
+        # Use directory name as canonical server key so that different
+        # manifest.server values (e.g. "a/b" vs "a-b") map to one entry.
+        server = manifest_path.parent.parent.name
 
         # Try to read description from SKILL.md frontmatter
         description = _read_skill_description(manifest_path.parent)
+
+        # Extract aliases from cli.yaml
+        cli_aliases = _read_cli_yaml_aliases(manifest_path.parent)
+        for alias in cli_aliases:
+            all_aliases[alias] = server
 
         if server not in entries:
             entries[server] = {
@@ -78,18 +110,22 @@ def rebuild_index(output_dir: str) -> None:
             if description:
                 entry["description"] = description
 
-    index = {
-        "version": 2,
+    index: dict = {
+        "version": 3,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "presets": list(entries.values()),
     }
+    if all_aliases:
+        index["aliases"] = dict(sorted(all_aliases.items()))
 
     index_path = root / "index.json"
     index_path.write_text(
         json.dumps(index, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    click.echo(f"  ✓ index.json ({len(entries)} preset(s))")
+    alias_count = len(all_aliases)
+    suffix = f", {alias_count} alias(es)" if alias_count else ""
+    click.echo(f"  ✓ index.json ({len(entries)} preset(s){suffix})")
 
 
 def export_preset(

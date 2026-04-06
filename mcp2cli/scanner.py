@@ -50,7 +50,32 @@ async def _scan_server(config: ServerConfig) -> ToolsJSON:
             )
 
 
-def scan_server(server_name: str) -> ToolsJSON | None:
+def scan_ephemeral(config: ServerConfig, server_meta: dict | None = None) -> ToolsJSON | None:
+    """Scan an MCP server from a direct config (no servers.yaml lookup).
+
+    Unlike ``scan_server``, this accepts a ``ServerConfig`` directly so the
+    server does not need to be registered in any config file.  Useful for
+    batch conversion workflows where servers are run ephemerally via
+    ``npx -y`` / ``uvx``.
+
+    Returns ToolsJSON on success (also saved to tools dir), None on failure.
+    """
+    click.echo(f"Scanning {config.name}...")
+    try:
+        tools_json = asyncio.run(_scan_server(config))
+    except Exception as e:
+        click.echo(f"Error scanning {config.name}: {e}", err=True)
+        return None
+
+    if server_meta:
+        tools_json.server_meta = server_meta
+
+    path = save_tools(tools_json)
+    click.echo(f"  Found {len(tools_json.tools)} tools. Written to {path}")
+    return tools_json
+
+
+def scan_server(server_name: str, server_meta: dict | None = None) -> ToolsJSON | None:
     """Scan an MCP server and save tools JSON. Returns ToolsJSON or None on failure."""
     config = find_server_config(server_name)
     if config is None:
@@ -64,6 +89,9 @@ def scan_server(server_name: str) -> ToolsJSON | None:
     except Exception as e:
         click.echo(f"Error scanning {server_name}: {e}", err=True)
         return None
+
+    if server_meta:
+        tools_json.server_meta = server_meta
 
     path = save_tools(tools_json)
     click.echo(f"  Found {len(tools_json.tools)} tools. 📦 Written to {path}")

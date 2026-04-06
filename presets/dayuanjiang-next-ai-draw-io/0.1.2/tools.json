@@ -106,5 +106,12 @@
         ]
       }
     }
-  ]
+  ],
+  "server_meta": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@next-ai-drawio/mcp-server@latest"
+    ]
+  }
 }

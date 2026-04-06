@@ -96,6 +96,7 @@ def build_pipeline(
     skip_disable: bool = False,
     no_preset: bool = False,
     preset_version: str | None = None,
+    server_meta: dict | None = None,
 ) -> list[Step]:
     """Build the install/convert pipeline.
 
@@ -107,6 +108,7 @@ def build_pipeline(
         skip_disable: Skip disabling the MCP config during skill sync.
         no_preset: Skip the preset-check step.
         preset_version: Specific preset version to pull.
+        server_meta: Server metadata dict to embed in tools.json during scan.
     """
     from mcp2cli.generator.cli_gen import generate_cli
     from mcp2cli.generator.skill_gen import generate_skill
@@ -133,7 +135,7 @@ def build_pipeline(
         ),
         Step(
             name="scan",
-            run=lambda: scan_server(server_name) is not None,
+            run=lambda: scan_server(server_name, server_meta=server_meta) is not None,
             retry_cmd=f"mcp2cli scan {server_name}",
             depends_on=[write_step_name],
             skip_if=["preset-check"],

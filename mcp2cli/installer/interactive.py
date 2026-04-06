@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import sys
 
 import click
 
@@ -23,6 +24,7 @@ def collect_env_values(
     """
     preset_envs = preset_envs or {}
     result: dict[str, str] = {}
+    is_tty = sys.stdin.isatty()
 
     click.echo("\n📋 Environment variables:")
 
@@ -37,6 +39,14 @@ def collect_env_values(
             result[name] = preset_envs[name]
             display = "****" if sensitive else preset_envs[name]
             click.echo(f"  {name}: {display} (from --env)")
+            continue
+
+        # Non-interactive: skip optional vars, warn for required
+        if not is_tty:
+            if required:
+                click.echo(f"  {name}: (missing, required — use --env {name}=VALUE)")
+            else:
+                click.echo(f"  {name}: (skipped, non-interactive)")
             continue
 
         # Build prompt

@@ -233,3 +233,13 @@ commands:
 3. **Leaf nodes**: Must have `_tool` and `_description`, optionally `_examples`
 4. **Intermediate nodes**: Only have `_description`; remaining keys are child nodes
 5. **Single-tool operations like search**: Can be placed directly under the parent group without an extra resource layer
+
+## server_aliases and command_shortcuts Notes
+
+The example above (mcp-atlassian) is a **multi-product server** with two distinct products (jira, confluence), so:
+- `server_aliases: [atlassian]` — core product name extracted from `mcp-atlassian`
+- `command_shortcuts: [jira, confluence]` — each is a **distinct product name**, not a generic resource
+
+For a **single-product server** (e.g., a gitlab MCP server named `zereight-gitlab-mcp`):
+- `server_aliases: [gitlab]` — extract core product name, strip author prefix and `-mcp` suffix
+- `command_shortcuts: []` — empty, because all tools belong to one product. Do NOT list generic resource names like `mr`, `issue`, `repo`, `pipeline`, etc. as shortcuts

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from mcp2cli.cli.mapping import cli_yaml_hash
+from mcp2cli.cli.mapping import cli_yaml_hash, load_cli_yaml
 from mcp2cli.config.tool_store import load_tools
 from mcp2cli.constants import CLI_DIR, TOOLS_DIR
 from mcp2cli.generator.validator import validate_cli_yaml, validate_skill
@@ -18,6 +18,42 @@ from mcp2cli.utils import safe_filename, skills_path
 
 PrepareResult = tuple[str, list[tuple[str, Path]], Manifest, object]
 """(resolved_version, file_pairs, manifest, tools_json)"""
+
+
+def _extract_aliases_from_cli_yaml(server_name: str) -> list[str]:
+    """Extract install aliases from cli.yaml's server_aliases only.
+
+    command_shortcuts are CLI command shortcuts (e.g. `mcp2cli jira ...`),
+    NOT server name aliases for install resolution, so they are excluded.
+    """
+    data = load_cli_yaml(server_name)
+    if not data:
+        return []
+    aliases: list[str] = []
+    for a in data.get("server_aliases", []):
+        if isinstance(a, str) and a != server_name:
+            aliases.append(a)
+    return aliases
+
+
+def _ensure_server_meta(server_name: str, tools_json) -> None:
+    """Ensure tools_json has server_meta. Infer from servers.yaml if missing."""
+    if tools_json.server_meta:
+        return
+
+    from mcp2cli.config.reader import find_server_config
+
+    config = find_server_config(server_name)
+    if config is None:
+        return
+
+    meta = config.to_server_meta()
+    tools_json.server_meta = meta
+
+    # Persist back to tools.json
+    from mcp2cli.config.tool_store import save_tools
+    save_tools(tools_json)
+    click.echo("  ✓ server_meta added to tools.json")
 
 
 def prepare_preset(
@@ -62,10 +98,13 @@ def prepare_preset(
         return None
     click.echo("  ✓ SKILL.md")
 
-    # 4. Collect files
+    # 4. Ensure server_meta is present in tools.json
+    _ensure_server_meta(server_name, tools_json)
+
+    # 5. Collect files
     file_pairs = _collect_files(server_name)  # [(preset_rel_path, local_Path)]
 
-    # 5. Build manifest
+    # 6. Build manifest
     manifest = Manifest(
         server=server_name,
         server_version=preset_version,
@@ -188,10 +227,13 @@ def _build_updated_index(
 
     existing_versions: list[str] = []
     existing_description = ""
-    index_format_version = 2
+    index_format_version = 3
 
+    # Collect existing aliases from remote index
+    all_aliases: dict[str, str] = {}
     if index is not None:
-        index_format_version = index.version
+        index_format_version = max(index.version, 3)
+        all_aliases = dict(index.aliases)
         entry = index.find(server_name)
         if entry is not None:
             # Keep previous versions, excluding the one being pushed (avoid dupes)
@@ -213,6 +255,14 @@ def _build_updated_index(
     else:
         other_presets = []
 
+    # Extract aliases for this server from cli.yaml
+    new_aliases = _extract_aliases_from_cli_yaml(server_name)
+    # Remove stale aliases that pointed to this server
+    all_aliases = {k: v for k, v in all_aliases.items() if v != server_name}
+    # Add new aliases
+    for alias in new_aliases:
+        all_aliases[alias] = server_name
+
     updated_entry = {
         "server": server_name,
         "latest": version,
@@ -225,8 +275,11 @@ def _build_updated_index(
     all_presets = other_presets + [updated_entry]
     all_presets.sort(key=lambda x: x["server"])
 
-    return {
+    result: dict = {
         "version": index_format_version,
         "updated_at": now,
         "presets": all_presets,
     }
+    if all_aliases:
+        result["aliases"] = dict(sorted(all_aliases.items()))
+    return result
