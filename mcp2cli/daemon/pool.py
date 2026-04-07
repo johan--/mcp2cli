@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import time
@@ -17,6 +19,15 @@ SERVER_IDLE_SECONDS = 600  # 10 min
 WATCHDOG_INTERVAL = 30
 
 
+def _config_hash(config: ServerConfig) -> str:
+    """Return a stable hash of the fields that affect the subprocess environment."""
+    payload = json.dumps(
+        {"command": config.command, "args": config.args, "env": config.env},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
 @dataclass
 class ServerConnection:
     """A live connection to an MCP server subprocess."""
@@ -27,6 +38,7 @@ class ServerConnection:
     write_stream: object
     cm_stdio: object  # context manager for stdio_client
     cm_session: object  # context manager for ClientSession
+    config_hash: str = ""
     last_used: float = field(default_factory=time.monotonic)
 
     def touch(self) -> None:
@@ -66,8 +78,13 @@ class ConnectionPool:
         async with self._locks[server_name]:
             conn = self._connections.get(server_name)
             if conn is not None:
-                conn.touch()
-                return conn.session
+                current_config = find_server_config(server_name)
+                if current_config is not None and _config_hash(current_config) != conn.config_hash:
+                    logger.info("Config changed for %s, reconnecting with new config.", server_name)
+                    await self._close_server(server_name)
+                else:
+                    conn.touch()
+                    return conn.session
 
             return await self._connect(server_name)
 
@@ -114,6 +131,7 @@ class ConnectionPool:
             write_stream=write_stream,
             cm_stdio=cm_stdio,
             cm_session=cm_session,
+            config_hash=_config_hash(config),
         )
         self._connections[server_name] = conn
         logger.info("Connected to %s", server_name)

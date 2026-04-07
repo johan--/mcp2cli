@@ -1017,6 +1017,24 @@ def daemon_stop_cmd():
         click.echo("Daemon is not running.")
 
 
+@daemon_group.command("reconnect")
+@click.argument("server_name")
+def daemon_reconnect_cmd(server_name: str):
+    """Disconnect a server so it reconnects with updated config on next call."""
+    from mcp2cli.daemon.client import daemon_disconnect
+    from mcp2cli.daemon.lifecycle import is_daemon_running
+
+    if not is_daemon_running():
+        click.echo("Daemon is not running.")
+        return
+
+    ok = daemon_disconnect(server_name)
+    if ok:
+        click.echo(f"'{server_name}' disconnected. It will reconnect with new config on next call.")
+    else:
+        click.echo(f"'{server_name}' was not connected (nothing to disconnect).")
+
+
 # ---------------------------------------------------------------------------
 # preset
 # ---------------------------------------------------------------------------
